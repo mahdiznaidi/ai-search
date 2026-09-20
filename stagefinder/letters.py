@@ -71,8 +71,11 @@ def build_angle(llm, job, facts: list[Fact], reasons: list[str], language: str,
     angle = llm.chat_json(ANGLE_SYSTEM.replace("{lang}", language), user, max_tokens=600)
     if not isinstance(angle, dict):
         raise LLMError("angle: réponse non conforme (objet JSON attendu)")
+    pairs = angle.get("pairs") or []
+    if not isinstance(pairs, list):
+        raise LLMError("angle: pairs non conforme")
     valid_ids = {f.id for f in facts}
-    angle["pairs"] = [p for p in angle.get("pairs", []) if p.get("fact_id") in valid_ids][:3]
+    angle["pairs"] = [p for p in pairs if isinstance(p, dict) and p.get("fact_id") in valid_ids][:3]
     angle.setdefault("language", language)
     return angle
 
@@ -108,21 +111,24 @@ def validate_letter(body: str, job, cited: list[Fact], job_tech: list[str],
     for phrase in BLACKLIST.get(language, []):
         if phrase in low:
             issues.append(f"formule interdite : « {phrase} »")
-    if normalize_company(job["company"]) not in normalize_company(body):
+    company_norm = normalize_company(job["company"])
+    if not company_norm:
+        issues.append("nom de l'entreprise inconnu")
+    elif company_norm not in normalize_company(body):
         issues.append(f"nom de l'entreprise absent : {job['company']}")
     title_toks = [t for t in normalize_title(job["title"]).split() if len(t) > 2]
     if title_toks and sum(t in low for t in title_toks) < max(1, len(title_toks) // 2):
         issues.append(f"intitulé du poste absent : {job['title']}")
     cited_tech = {t.lower() for f in cited for t in f.tech}
     for tech in job_tech:
-        if re.search(rf"\b{re.escape(tech.lower())}\b", low) and tech.lower() not in cited_tech:
+        if re.search(rf"(?<!\w){re.escape(tech.lower())}(?!\w)", low) and tech.lower() not in cited_tech:
             issues.append(f"techno revendiquée hors faits cités : {tech}")
     allowed = " ".join(f"{f.detail} {f.metric} {f.period} {f.label}" for f in cited).lower()
     allowed += " " + (job["full_description"] or "").lower()
+    allowed_nums = {re.sub(r"[  .,]", "", n) for n in _NUM.findall(allowed)}
     for n in _NUM.findall(body):
         clean = re.sub(r"[  .,]", "", n)
-        if len(clean) >= 2 and not re.fullmatch(r"20\d\d", clean) and \
-                clean not in re.sub(r"[  .,]", "", allowed):
+        if len(clean) >= 2 and not re.fullmatch(r"20\d\d", clean) and clean not in allowed_nums:
             issues.append(f"chiffre non sourcé : {n.strip()}")
     return issues
 
@@ -166,7 +172,7 @@ def generate_for_job(conn: sqlite3.Connection, llm, job_id: int, campaign: Campa
     version = 1 + (conn.execute(
         "SELECT COALESCE(MAX(version),0) FROM letters WHERE job_id=? AND campaign_id=?",
         (job_id, campaign.id)).fetchone()[0])
-    path = Path(letters_dir) / f"{_safe(job['company'])}_{_safe(job['title'])}_v{version}.docx"
+    path = Path(letters_dir) / f"{job_id}_{_safe(job['company'])}_{_safe(job['title'])}_v{version}.docx"
     render_docx(body, path)
     cur = conn.execute(
         "INSERT INTO letters(job_id,campaign_id,version,language,angle,body,file_path,warnings,"

@@ -145,3 +145,57 @@ def test_build_angle_rejects_non_dict_response(conn, fake_llm, tmp_path):
     fake_llm.responses = ["[1]"]
     assert L.generate_pending(conn, fake_llm, camp, FACTS, tmp_path) == {"letters": 0, "failed": 1}
     assert _job(conn, jid)["status"] == "failed_letter"
+
+
+def test_validate_flags_number_that_is_substring_of_real_one(conn):
+    _, jid = _seed(conn)
+    body = GOOD.replace("10 000 articles", "1 000 articles")
+    issues = L.validate_letter(body, _job(conn, jid), FACTS[:1], [], "fr")
+    assert any("1 000" in i for i in issues)
+
+
+def test_validate_flags_cpp_tech_with_symbol_boundary(conn):
+    _, jid = _seed(conn)
+    body = "Bonjour, je code en C++ depuis plusieurs années chez vous."
+    issues = L.validate_letter(body, _job(conn, jid), FACTS[:1], ["C++"], "fr")
+    assert any("C++" in i for i in issues)
+
+
+def test_validate_does_not_flag_cpp_when_cited(conn):
+    _, jid = _seed(conn)
+    cpp_fact = Fact(3, "skill", "Dev C++", "", ["C++"], "", "")
+    body = "Bonjour, je code en C++ depuis plusieurs années chez vous."
+    issues = L.validate_letter(body, _job(conn, jid), [cpp_fact], ["C++"], "fr")
+    assert not any("C++" in i for i in issues)
+
+
+def test_validate_flags_missing_company_name(conn):
+    _, jid = _seed(conn)
+    conn.execute("UPDATE jobs SET company='' WHERE id=?", (jid,))
+    conn.commit()
+    issues = L.validate_letter(GOOD, _job(conn, jid), FACTS[:1], ["Python", "Talend"], "fr")
+    assert any("entreprise" in i for i in issues)
+
+
+def test_generate_continues_when_pairs_items_are_not_dicts(conn, fake_llm, tmp_path):
+    camp, jid = _seed(conn)
+    bad_angle = {**ANGLE, "pairs": ["1", 2]}
+    fake_llm.responses = [json.dumps(bad_angle), GOOD]
+    counters = L.generate_pending(conn, fake_llm, camp, FACTS, tmp_path)
+    assert counters == {"letters": 1, "failed": 0}
+
+
+def test_generate_fails_when_pairs_is_not_a_list(conn, fake_llm, tmp_path):
+    camp, jid = _seed(conn)
+    bad_angle = {**ANGLE, "pairs": {"a": 1}}
+    fake_llm.responses = [json.dumps(bad_angle)]
+    assert L.generate_pending(conn, fake_llm, camp, FACTS, tmp_path) == {"letters": 0, "failed": 1}
+    assert _job(conn, jid)["status"] == "failed_letter"
+
+
+def test_generate_docx_filename_prefixed_by_job_id(conn, fake_llm, tmp_path):
+    camp, jid = _seed(conn)
+    fake_llm.responses = [json.dumps(ANGLE), GOOD]
+    lid = L.generate_for_job(conn, fake_llm, jid, camp, FACTS, tmp_path)
+    row = conn.execute("SELECT file_path FROM letters WHERE id=?", (lid,)).fetchone()
+    assert Path(row["file_path"]).name.startswith(f"{jid}_")
