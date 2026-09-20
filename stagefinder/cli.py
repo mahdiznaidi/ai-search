@@ -12,6 +12,7 @@ from stagefinder import db, letters, pipeline
 from stagefinder.config import load_settings
 
 log = logging.getLogger(__name__)
+from stagefinder.keywords import suggest_terms
 from stagefinder.llm import LLMClient
 from stagefinder.models import add_terms, create_campaign, load_campaign
 from stagefinder.profile import load_or_extract_facts
@@ -56,6 +57,46 @@ def cmd_campaign_list(a) -> int:
         print(f"[{r['id']}] {r['name']} — {r['country']} — {r['job_type'] or 'tous'} — "
               f"lettres: {r['letter_language']} — seuil {r['score_threshold']} — "
               f"dernier run: {r['last_run_at'] or 'jamais'}")
+    return 0
+
+
+def cmd_campaign_suggest(a) -> int:
+    settings, conn = _open()
+    campaign = load_campaign(conn, a.campaign_id)
+    llm = _llm(settings)
+    facts = []
+    if settings.cv_path and settings.cv_path.exists():
+        try:
+            facts = load_or_extract_facts(conn, llm, settings.cv_path)
+        except ValueError:
+            facts = []
+    suggestions = suggest_terms(llm, campaign, facts)
+    for kind in ("keyword", "exclude", "location"):
+        values = ", ".join(suggestions[kind]) if suggestions[kind] else "(aucune suggestion)"
+        print(f"{kind}: {values}")
+    if a.apply:
+        for kind in ("keyword", "exclude", "location"):
+            if suggestions[kind]:
+                add_terms(conn, a.campaign_id, kind, suggestions[kind], origin="ai")
+        print("termes ajoutés (origin=ai)")
+    return 0
+
+
+def cmd_campaign_terms_list(a) -> int:
+    settings, conn = _open()
+    for r in conn.execute(
+            "SELECT * FROM campaign_terms WHERE campaign_id=? ORDER BY kind, id", (a.campaign_id,)):
+        state = "actif" if r["enabled"] else "désactivé"
+        print(f"[{r['id']}] {r['kind']:10} {r['term']:30} ({r['origin']}, {state})")
+    return 0
+
+
+def cmd_campaign_term_toggle(a) -> int:
+    settings, conn = _open()
+    enabled = 1 if a.enable else 0
+    conn.execute("UPDATE campaign_terms SET enabled=? WHERE id=?", (enabled, a.term_id))
+    conn.commit()
+    print(f"terme {a.term_id} {'activé' if enabled else 'désactivé'}")
     return 0
 
 
@@ -139,6 +180,19 @@ def build_parser() -> argparse.ArgumentParser:
     term.add_argument("terms", nargs="+")
     term.set_defaults(fn=cmd_campaign_term)
     c.add_parser("list").set_defaults(fn=cmd_campaign_list)
+    suggest = c.add_parser("suggest")
+    suggest.add_argument("campaign_id", type=int)
+    suggest.add_argument("--apply", action="store_true")
+    suggest.set_defaults(fn=cmd_campaign_suggest)
+    terms_list = c.add_parser("terms")
+    terms_list.add_argument("campaign_id", type=int)
+    terms_list.set_defaults(fn=cmd_campaign_terms_list)
+    toggle = c.add_parser("term-toggle")
+    toggle.add_argument("term_id", type=int)
+    grp = toggle.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--enable", action="store_true")
+    grp.add_argument("--disable", action="store_true")
+    toggle.set_defaults(fn=cmd_campaign_term_toggle)
 
     r = sub.add_parser("run")
     r.add_argument("--campaign", type=int, required=True)

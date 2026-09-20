@@ -89,3 +89,53 @@ def test_letters_regenerate_without_cv_fails_explicitly(tmp_path, capsys, monkey
 
     assert cli.main(["letters", "regenerate", "1", "--campaign", "1"]) == 1
     assert "CV_PATH" in capsys.readouterr().err
+
+
+def test_campaign_suggest_prints_and_apply_adds_terms(tmp_path, monkeypatch, capsys):
+    from stagefinder import db
+    dbp = tmp_path / "s.db"
+    env = {"OPENROUTER_API_KEY": "k", "DB_PATH": str(dbp), "LETTERS_DIR": str(tmp_path)}
+    monkeypatch.setattr(cli, "_env", lambda: env)
+    cli.main(["campaign", "add", "--name", "DE", "--intent", "ingénieur IA junior", "--country", "DE"])
+    capsys.readouterr()
+
+    class FakeLLM:
+        model = "fake"
+        def __init__(self):
+            self.calls = 0
+        def chat_json(self, system, user, **kw):
+            self.calls += 1
+            return {"keyword": ["KI Junior"], "exclude": ["Senior"], "location": ["Berlin"]}
+
+    monkeypatch.setattr(cli, "_llm", lambda settings: FakeLLM())
+    assert cli.main(["campaign", "suggest", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "KI Junior" in out and "Berlin" in out
+
+    conn = db.connect(dbp)
+    assert conn.execute("SELECT COUNT(*) FROM campaign_terms").fetchone()[0] == 0
+
+    assert cli.main(["campaign", "suggest", "1", "--apply"]) == 0
+    assert conn.execute("SELECT COUNT(*) FROM campaign_terms WHERE origin='ai'").fetchone()[0] == 3
+
+    capsys.readouterr()
+    assert cli.main(["campaign", "terms", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "KI Junior" in out and "ai" in out and "actif" in out
+
+
+def test_campaign_term_toggle_disables_term(tmp_path, monkeypatch):
+    from stagefinder import db
+    dbp = tmp_path / "s.db"
+    env = {"OPENROUTER_API_KEY": "k", "DB_PATH": str(dbp), "LETTERS_DIR": str(tmp_path)}
+    monkeypatch.setattr(cli, "_env", lambda: env)
+    cli.main(["campaign", "add", "--name", "DE", "--intent", "x", "--country", "DE"])
+    cli.main(["campaign", "term", "1", "--kind", "keyword", "abc"])
+    conn = db.connect(dbp)
+    tid = conn.execute("SELECT id FROM campaign_terms").fetchone()[0]
+
+    assert cli.main(["campaign", "term-toggle", str(tid), "--disable"]) == 0
+    assert conn.execute("SELECT enabled FROM campaign_terms WHERE id=?", (tid,)).fetchone()[0] == 0
+
+    assert cli.main(["campaign", "term-toggle", str(tid), "--enable"]) == 0
+    assert conn.execute("SELECT enabled FROM campaign_terms WHERE id=?", (tid,)).fetchone()[0] == 1
