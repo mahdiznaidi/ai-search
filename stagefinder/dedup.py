@@ -30,7 +30,7 @@ _SYNONYMS = {
     "stagiaire": "stage", "internship": "stage", "intern": "stage",
     "praktikum": "stage", "praktikant": "stage", "praktikantin": "stage",
     "werkstudent": "stage", "werkstudentin": "stage", "pasantia": "stage",
-    "tirocinio": "stage", "estagio": "stage",
+    "pasantía": "stage", "tirocinio": "stage", "estagio": "stage",
 }
 # "via indeed" is noise anywhere in the string; legal-form suffixes (sas, gmbh, group,
 # france…) are only noise when they are the LAST token(s) — stripping them anywhere
@@ -104,7 +104,7 @@ def _find_canonical(conn: sqlite3.Connection, fp: str, company_norm: str,
     for cand in conn.execute(
             "SELECT id, title FROM jobs WHERE company_norm=? AND duplicate_of IS NULL",
             (company_norm,)):
-        if fuzz.token_set_ratio(title_norm, normalize_title(cand["title"])) >= FUZZY_THRESHOLD:
+        if fuzz.token_sort_ratio(title_norm, normalize_title(cand["title"])) >= FUZZY_THRESHOLD:
             return cand["id"]
     return None
 
@@ -137,7 +137,7 @@ def upsert_job(conn: sqlite3.Connection, raw: RawJob, campaign_id: int,
         conn.commit()
         return UpsertResult(existing["id"], False, existing["duplicate_of"])
 
-    canonical = _find_canonical(conn, fp, company_norm, title_norm)
+    canonical = _find_canonical(conn, fp, company_norm, title_norm) if company_norm else None
     status = "duplicate" if canonical else "discovered"
     cur = conn.execute(
         "INSERT INTO jobs(source,external_id,fingerprint,company_norm,title,company,location,"

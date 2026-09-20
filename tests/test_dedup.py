@@ -92,11 +92,47 @@ def test_layer2_cross_platform_same_offer_is_duplicate(conn, cid):
 
 
 def test_layer3_fuzzy_same_company_city_suffix(conn, cid):
+    # A city suffix makes the titles genuinely different token sets under token_sort_ratio;
+    # a visible duplicate is preferred over a silent merge (spec bias) — kept separate.
     a = upsert_job(conn, _raw(), cid, "kw", "Paris")
     b = upsert_job(conn, _raw(source="linkedin", ext="77",
                         title="Stage Data Scientist H/F - Paris",
                         url="https://www.linkedin.com/jobs/view/77"), cid, "kw", "Paris")
-    assert b.duplicate_of == a.job_id
+    assert b.duplicate_of is None and b.job_id != a.job_id
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Stage Data Scientist", "Stage Data Scientist – Computer Vision"),
+    ("Développeur Python", "Développeur Python Senior"),
+    ("Stage Data Analyst", "Stage Data Analyst Marketing"),
+])
+def test_layer3_superset_titles_not_merged(conn, cid, a, b):
+    r1 = upsert_job(conn, _raw(ext="k1", title=a, url="https://fr.indeed.com/viewjob?jk=k1"),
+                    cid, "kw", "Paris")
+    r2 = upsert_job(conn, _raw(source="linkedin", ext="k2", title=b,
+                        url="https://www.linkedin.com/jobs/view/999"), cid, "kw", "Paris")
+    assert r2.duplicate_of is None and r2.job_id != r1.job_id
+
+
+def test_empty_company_never_merges(conn, cid):
+    r1 = upsert_job(conn, _raw(source="indeed", ext="e1", title="Stage Data Scientist",
+                        company="", url="https://fr.indeed.com/viewjob?jk=e1"), cid, "kw", "Paris")
+    r2 = upsert_job(conn, _raw(source="linkedin", ext="e2", title="Stage Data Scientist Junior",
+                        company="", url="https://www.linkedin.com/jobs/view/111"), cid, "kw", "Paris")
+    r3 = upsert_job(conn, _raw(source="jobteaser", ext="e3", title="Stage Data Scientist Senior",
+                        company="", url="https://www.jobteaser.com/fr/job-offers/222-x"),
+                    cid, "kw", "Paris")
+    for r in (r1, r2, r3):
+        assert r.duplicate_of is None
+    ids = {r1.job_id, r2.job_id, r3.job_id}
+    assert len(ids) == 3
+    statuses = [conn.execute("SELECT status FROM jobs WHERE id=?", (i,)).fetchone()["status"]
+               for i in ids]
+    assert all(s != "duplicate" for s in statuses)
+
+
+def test_es_synonym_pasantia_converges(conn, cid):
+    assert normalize_title("Pasantía Data Science (H/M)") == normalize_title("Data Science Internship")
 
 
 def test_layer1_resighting_duplicate_increments_canonical_seen_count(conn, cid):
