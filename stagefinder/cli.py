@@ -75,6 +75,9 @@ def cmd_run(a) -> int:
 
 def cmd_letters_regenerate(a) -> int:
     settings, conn = _open()
+    if not settings.cv_path or not settings.cv_path.exists():
+        print("CV_PATH absent ou introuvable : impossible de régénérer sans profil", file=sys.stderr)
+        return 1
     llm = _llm(settings)
     campaign = load_campaign(conn, a.campaign)
     facts = load_or_extract_facts(conn, llm, settings.cv_path)

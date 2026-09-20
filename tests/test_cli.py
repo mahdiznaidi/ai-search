@@ -44,3 +44,13 @@ def test_run_invokes_pipeline(tmp_path, monkeypatch):
     assert called == {"campaign_id": 1, "sources": ["jobspy"], "run_id": None, "limit": 9}
     assert cli.main(["run", "--campaign", "1", "--resume", "7"]) == 0
     assert called["run_id"] == 7 and called["sources"] == ["jobspy", "jobteaser"]
+
+
+def test_letters_regenerate_without_cv_fails_explicitly(tmp_path, capsys, monkeypatch):
+    dbp = tmp_path / "s.db"
+    env = {"OPENROUTER_API_KEY": "k", "DB_PATH": str(dbp), "LETTERS_DIR": str(tmp_path)}
+    monkeypatch.setattr(cli, "_env", lambda: env)
+    cli.main(["campaign", "add", "--name", "DS", "--intent", "i", "--country", "FR"])
+
+    assert cli.main(["letters", "regenerate", "1", "--campaign", "1"]) == 1
+    assert "CV_PATH" in capsys.readouterr().err
