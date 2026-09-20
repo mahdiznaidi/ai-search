@@ -34,6 +34,13 @@ def _job_text(row: sqlite3.Row) -> str:
     return f"{row['title']} {row['company']} {row['full_description'] or row['description'] or ''}"
 
 
+def _as_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def score_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: list[Fact],
                   batch_size: int = 5) -> dict:
     must_have = campaign_terms(conn, campaign.id, "must_have")
@@ -79,15 +86,24 @@ def score_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: list
                 counters["failed"] += 1
             conn.commit()
             continue
-        by_index = {int(m["index"]): m for m in answer
-                    if isinstance(m, dict) and "index" in m and "score" in m}
+        by_index = {}
+        for m in answer:
+            if isinstance(m, dict) and "score" in m:
+                idx = _as_int(m.get("index"))
+                if idx is not None and idx not in by_index:  # premier gagne : pas d'écrasement silencieux
+                    by_index[idx] = m
         for k, r in enumerate(batch):
             m = by_index.get(k)
             if m is None:
                 _set(conn, r["id"], "failed_score", "indice absent de la réponse LLM")
                 counters["failed"] += 1
                 continue
-            score = max(0, min(100, int(m["score"])))
+            score = _as_int(m.get("score"))
+            if score is None:
+                _set(conn, r["id"], "failed_score", "score non numérique dans la réponse LLM")
+                counters["failed"] += 1
+                continue
+            score = max(0, min(100, score))
             reasons = [str(x) for x in (m.get("reasons") or [])]
             conn.execute(
                 "INSERT OR REPLACE INTO scores(job_id,campaign_id,score,reasons,model,scored_at) "

@@ -90,3 +90,33 @@ def test_non_list_llm_answer_is_failed_score(conn, fake_llm):
     assert c == {"scored": 0, "skipped": 0, "failed": 1}
     row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (ids[0],)).fetchone()
     assert row["status"] == "failed_score" and row["failure_reason"]
+
+
+def test_non_numeric_index_is_failed_not_crash(conn, fake_llm):
+    camp, ids = _seed(conn, ["A"])
+    fake_llm.responses = [json.dumps([{"index": "zéro", "score": 90, "reasons": []}])]
+    c = S.score_pending(conn, fake_llm, camp, FACTS)
+    assert c == {"scored": 0, "skipped": 0, "failed": 1}
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (ids[0],)).fetchone()
+    assert row["status"] == "failed_score" and row["failure_reason"]
+
+
+def test_non_numeric_score_is_failed_not_crash(conn, fake_llm):
+    camp, ids = _seed(conn, ["A"])
+    fake_llm.responses = [json.dumps([{"index": 0, "score": "high", "reasons": []}])]
+    c = S.score_pending(conn, fake_llm, camp, FACTS)
+    assert c == {"scored": 0, "skipped": 0, "failed": 1}
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (ids[0],)).fetchone()
+    assert row["status"] == "failed_score" and "score non numérique" in row["failure_reason"]
+
+
+def test_duplicate_index_keeps_first_entry(conn, fake_llm):
+    camp, ids = _seed(conn, ["A"])
+    fake_llm.responses = [json.dumps([
+        {"index": 0, "score": 90, "reasons": ["premier"]},
+        {"index": 0, "score": 10, "reasons": ["second"]},
+    ])]
+    c = S.score_pending(conn, fake_llm, camp, FACTS)
+    assert c == {"scored": 1, "skipped": 0, "failed": 0}
+    sc = conn.execute("SELECT score FROM scores WHERE job_id=?", (ids[0],)).fetchone()
+    assert sc["score"] == 90
