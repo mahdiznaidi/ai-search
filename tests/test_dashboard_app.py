@@ -71,3 +71,38 @@ def test_toggle_term_checkbox_disables_it(env):
     assert not at.exception
     conn2 = db.connect(env["db_path"])
     assert conn2.execute("SELECT enabled FROM campaign_terms").fetchone()[0] == 0
+
+
+def test_run_page_shows_latest_run_status(env):
+    from stagefinder import db
+    from stagefinder.models import create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    conn.execute("INSERT INTO runs(campaign_id,status,stage,counters,started_at) "
+                "VALUES (?,?,?,?,?)", (cid, "done", "generate", '{"new": 3}', db.now()))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Run").run()
+    at.selectbox(key="run_campaign_select").set_value(cid).run()
+    assert not at.exception
+    assert any("done" in m.value for m in at.markdown)
+    assert any('"new": 3' in m.value or "new" in m.value for m in at.json)
+
+
+def test_run_page_with_no_runs_shows_message(env):
+    from stagefinder import db
+    from stagefinder.models import create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    create_campaign(conn, "DS", "stage data", "FR")
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Run").run()
+    assert not at.exception
+    assert any("aucun run" in i.value.lower() for i in at.info)

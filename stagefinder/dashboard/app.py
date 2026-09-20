@@ -121,7 +121,40 @@ def _page_campaigns() -> None:
                        "Voir l'écran « Run » pour suivre l'avancement.")
 
 
-PAGES = {"Campagnes": _page_campaigns}
+def _page_run() -> None:
+    st.header("Run")
+    conn = _conn()
+    campaigns = D.list_campaigns(conn)
+    if not campaigns:
+        st.info("Aucune campagne. Créez-en une dans l'écran Campagnes.")
+        return
+
+    options = {c["id"]: c["name"] for c in campaigns}
+    cid = st.selectbox("Campagne", list(options.keys()), format_func=lambda i: options[i],
+                       key="run_campaign_select")
+
+    if st.button("Rafraîchir", key="refresh_run"):
+        st.rerun()
+
+    runs = D.list_runs(conn, cid)
+    if not runs:
+        st.info("Aucun run pour cette campagne.")
+        return
+
+    latest = runs[0]
+    st.markdown(f"**Dernier run [{latest['id']}] : {latest['status']}** — étape : "
+               f"{latest['stage'] or '—'} — appels LLM : {latest['llm_calls']}")
+    if latest["counters"]:
+        st.json(latest["counters"])
+    if latest["error"]:
+        st.error(latest["error"])
+
+    with st.expander("Historique des runs"):
+        for r in runs:
+            st.text(f"[{r['id']}] {r['status']} — {r['stage'] or '—'} — {r['started_at']}")
+
+
+PAGES = {"Campagnes": _page_campaigns, "Run": _page_run}
 
 
 def main() -> None:
