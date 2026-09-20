@@ -20,6 +20,10 @@ class BudgetExceeded(LLMError):
     pass
 
 
+class LLMFatal(LLMError):
+    pass
+
+
 def extract_json(text: str) -> Any:
     """Premier JSON valide dans `text` : bloc ``` ou premier objet/tableau trouvé."""
     m = _FENCE.search(text)
@@ -63,7 +67,10 @@ class LLMClient:
                 self._sleep(2 ** attempt)
                 continue
             if r.status_code == 200:
-                content = r.json()["choices"][0]["message"]["content"]
+                body = r.json()
+                if "choices" not in body:
+                    raise LLMError(f"réponse sans choices: {str(body.get('error') or body)[:200]}")
+                content = body["choices"][0]["message"]["content"]
                 if not content:
                     raise LLMError("réponse vide")
                 return content
@@ -71,6 +78,8 @@ class LLMClient:
                 last = f"HTTP {r.status_code}"
                 self._sleep(2 ** attempt)
                 continue
+            if r.status_code in (400, 401, 402, 403):
+                raise LLMFatal(f"HTTP {r.status_code} (fatal: clé, crédit ou requête invalide)")
             raise LLMError(f"HTTP {r.status_code} (non retentable)")
         raise LLMError(f"échec après 3 tentatives: {last}")
 

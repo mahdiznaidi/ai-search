@@ -1,6 +1,6 @@
 import pytest
 
-from stagefinder.llm import BudgetExceeded, LLMClient, LLMError, extract_json
+from stagefinder.llm import BudgetExceeded, LLMClient, LLMError, LLMFatal, extract_json
 
 
 class Resp:
@@ -58,6 +58,31 @@ def test_no_retry_on_401():
     with pytest.raises(LLMError):
         c.chat("s", "u")
     assert len(post.calls) == 1
+
+
+def test_401_raises_llm_fatal():
+    post = make_post([Resp(401)])
+    c = LLMClient("k", "m", post=post, sleep=lambda s: None)
+    with pytest.raises(LLMFatal) as exc:
+        c.chat("s", "u")
+    assert isinstance(exc.value, LLMError)
+    assert len(post.calls) == 1
+
+
+class RespWithBody(Resp):
+    def __init__(self, status, body):
+        super().__init__(status)
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+def test_200_with_error_body_raises_llm_error():
+    post = make_post([RespWithBody(200, {"error": {"message": "moderation"}})])
+    c = LLMClient("k", "m", post=post, sleep=lambda s: None)
+    with pytest.raises(LLMError, match="moderation"):
+        c.chat("s", "u")
 
 
 def test_budget_exceeded():

@@ -4,7 +4,7 @@ import pytest
 
 from stagefinder import db, enrich as E
 from stagefinder.dedup import upsert_job
-from stagefinder.llm import BudgetExceeded, LLMError
+from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
 from stagefinder.models import RawJob, create_campaign
 
 PAGE = """<html><head><title>x</title><script>var a=1</script></head><body>
@@ -106,6 +106,18 @@ def test_enrich_pending_propagates_budget_exceeded(conn, fake_llm):
         raise BudgetExceeded("plafond")
     fake_llm.responses = [boom]
     with pytest.raises(BudgetExceeded):
+        E.enrich_pending(conn, fake_llm, fetch=lambda u, timeout=15: PAGE)
+    row = conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "discovered"
+
+
+def test_enrich_pending_propagates_llm_fatal(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+
+    def boom():
+        raise LLMFatal("clé invalide")
+    fake_llm.responses = [boom]
+    with pytest.raises(LLMFatal):
         E.enrich_pending(conn, fake_llm, fetch=lambda u, timeout=15: PAGE)
     row = conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()
     assert row["status"] == "discovered"

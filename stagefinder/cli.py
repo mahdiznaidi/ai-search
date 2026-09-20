@@ -90,6 +90,30 @@ def cmd_letters_regenerate(a) -> int:
     return 0
 
 
+_RETRY_STAGES = {
+    "enrich": ("failed_enrich", "discovered"),
+    "score": ("failed_score", "enriched"),
+    "letter": ("failed_letter", "scored"),
+}
+
+
+def cmd_jobs_retry_failed(a) -> int:
+    settings, conn = _open()
+    from_status, to_status = _RETRY_STAGES[a.stage]
+    if a.campaign is not None:
+        cur = conn.execute(
+            "UPDATE jobs SET status=?, failure_reason=NULL WHERE status=? AND id IN "
+            "(SELECT job_id FROM job_campaigns WHERE campaign_id=?)",
+            (to_status, from_status, a.campaign))
+    else:
+        cur = conn.execute(
+            "UPDATE jobs SET status=?, failure_reason=NULL WHERE status=?",
+            (to_status, from_status))
+    conn.commit()
+    print(f"{cur.rowcount} offre(s) remise(s) en statut {to_status}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="stagefinder")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -127,6 +151,12 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--instruction", default="")
     rg.add_argument("--language", default=None, choices=["fr", "en"])
     rg.set_defaults(fn=cmd_letters_regenerate)
+
+    j = sub.add_parser("jobs").add_subparsers(dest="sub", required=True)
+    rf = j.add_parser("retry-failed")
+    rf.add_argument("--stage", required=True, choices=["enrich", "score", "letter"])
+    rf.add_argument("--campaign", type=int, default=None)
+    rf.set_defaults(fn=cmd_jobs_retry_failed)
     return p
 
 

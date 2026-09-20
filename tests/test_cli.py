@@ -46,6 +46,31 @@ def test_run_invokes_pipeline(tmp_path, monkeypatch):
     assert called["run_id"] == 7 and called["sources"] == ["jobspy", "jobteaser"]
 
 
+def test_jobs_retry_failed_enrich(tmp_path, capsys, monkeypatch):
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob
+
+    dbp = tmp_path / "s.db"
+    env = {"OPENROUTER_API_KEY": "k", "DB_PATH": str(dbp), "LETTERS_DIR": str(tmp_path)}
+    monkeypatch.setattr(cli, "_env", lambda: env)
+    cli.main(["campaign", "add", "--name", "DS", "--intent", "i", "--country", "FR"])
+
+    conn = db.connect(dbp)
+    r = upsert_job(conn, RawJob("indeed", "k1", "Stage DS", "Co", "Paris", "https://x", "d"), 1, "k", "l")
+    conn.execute("UPDATE jobs SET status='failed_enrich', failure_reason='fetch: 500' WHERE id=?",
+                 (r.job_id,))
+    conn.commit()
+    conn.close()
+
+    assert cli.main(["jobs", "retry-failed", "--stage", "enrich"]) == 0
+    out = capsys.readouterr().out
+    assert "1" in out
+
+    conn = db.connect(dbp)
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (r.job_id,)).fetchone()
+    assert row["status"] == "discovered" and row["failure_reason"] is None
+
+
 def test_letters_regenerate_without_cv_fails_explicitly(tmp_path, capsys, monkeypatch):
     dbp = tmp_path / "s.db"
     env = {"OPENROUTER_API_KEY": "k", "DB_PATH": str(dbp), "LETTERS_DIR": str(tmp_path)}

@@ -10,7 +10,7 @@ from docx import Document
 from stagefinder.db import now
 from stagefinder.dedup import normalize_company, normalize_title
 from stagefinder.enrich import detect_language
-from stagefinder.llm import BudgetExceeded, LLMError
+from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
 from stagefinder.models import Campaign, Fact
 from stagefinder.profile import facts_by_ids, format_facts
 
@@ -162,7 +162,7 @@ def generate_for_job(conn: sqlite3.Connection, llm, job_id: int, campaign: Campa
         if issues:
             body = write_letter(llm, job, angle, cited, lang, instruction, feedback=issues)
             issues = validate_letter(body, job, cited, job_tech, lang)
-    except BudgetExceeded:
+    except (BudgetExceeded, LLMFatal):
         raise
     except LLMError as e:
         conn.execute("UPDATE jobs SET status='failed_letter', failure_reason=? WHERE id=?",
@@ -194,7 +194,7 @@ def generate_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: l
         try:
             generate_for_job(conn, llm, r["id"], campaign, facts, letters_dir)
             counters["letters"] += 1
-        except BudgetExceeded:
+        except (BudgetExceeded, LLMFatal):
             raise
         except LLMError:
             counters["failed"] += 1

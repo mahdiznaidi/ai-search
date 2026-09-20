@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 from stagefinder.db import now
-from stagefinder.llm import BudgetExceeded, LLMError
+from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
 from stagefinder.models import Campaign, Fact, campaign_terms
 from stagefinder.profile import format_facts
 
@@ -71,7 +71,7 @@ def score_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: list
                      f"Stack: {', '.join(e.get('tech_stack', [])[:12])}\n\n")
         try:
             answer = llm.chat_json(system, user, max_tokens=600)
-        except BudgetExceeded:
+        except (BudgetExceeded, LLMFatal):
             raise
         except LLMError as e:
             for r in batch:

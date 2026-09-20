@@ -128,6 +128,19 @@ def test_run_campaign_budget_exceeded_marks_failed(conn, settings, fake_llm):
     assert run["status"] == "failed" and "plafond" in run["error"] and run["stage"] == "enrich"
 
 
+def test_run_campaign_llm_fatal_marks_failed(conn, settings, fake_llm):
+    from stagefinder.llm import LLMFatal
+    cid = _campaign(conn)
+
+    def boom():
+        raise LLMFatal("clé invalide")
+    fake_llm.responses = [FACTS_JSON, boom]
+    run_id = _run(conn, settings, cid, fake_llm, FakeSource(_jobs()))
+    run = conn.execute("SELECT status, error, stage FROM runs WHERE id=?", (run_id,)).fetchone()
+    assert run["status"] == "failed" and run["error"].startswith("llm:") and run["stage"] == "enrich"
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE status='failed_enrich'").fetchone()[0] == 0
+
+
 def test_run_campaign_without_cv_fails_explicitly(conn, settings, fake_llm):
     cid = _campaign(conn)
     s = Settings("k", "m", 50, None, settings.db_path, settings.letters_dir)

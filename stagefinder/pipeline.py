@@ -12,7 +12,7 @@ from stagefinder import enrich, letters, scoring
 from stagefinder.config import Settings
 from stagefinder.db import now
 from stagefinder.dedup import upsert_job
-from stagefinder.llm import BudgetExceeded
+from stagefinder.llm import BudgetExceeded, LLMFatal
 from stagefinder.models import Campaign, campaign_terms, load_campaign
 from stagefinder.profile import load_or_extract_facts
 from stagefinder.sources.base import Source
@@ -99,6 +99,9 @@ def run_campaign(conn: sqlite3.Connection, settings: Settings, campaign_id: int,
                     llm_calls=llm.calls, finished_at=now())
     except BudgetExceeded as e:
         _update_run(conn, run_id, status="failed", stage=stage, error=f"budget: {e}",
+                    counters=json.dumps(counters), llm_calls=llm.calls, finished_at=now())
+    except LLMFatal as e:
+        _update_run(conn, run_id, status="failed", stage=stage, error=f"llm: {e}",
                     counters=json.dumps(counters), llm_calls=llm.calls, finished_at=now())
     except Exception as e:  # erreur globale : on la rend visible, on ne dégrade pas
         log.exception("run %s échoué à l'étape %s", run_id, stage)

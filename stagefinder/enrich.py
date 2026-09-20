@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from langdetect import DetectorFactory, LangDetectException, detect
 
-from stagefinder.llm import BudgetExceeded, LLMError
+from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
 
 DetectorFactory.seed = 0
 log = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def enrich_job(conn: sqlite3.Connection, llm, job_id: int, fetch=fetch_page,
         return False
     try:
         data = llm.chat_json(SYSTEM, text[:8000], max_tokens=700)
-    except BudgetExceeded:
+    except (BudgetExceeded, LLMFatal):
         raise
     except LLMError as e:
         _fail(conn, job_id, f"llm: {e}")
