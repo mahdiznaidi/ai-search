@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -18,6 +19,14 @@ Réponds UNIQUEMENT en JSON : {"facts": [...]}"""
 
 def cv_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tech_list(v) -> list[str]:
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str) and v.strip():
+        return [t.strip() for t in re.split(r"[,;/]", v) if t.strip()]
+    return []
 
 
 def extract_pdf_text(path: Path) -> str:
@@ -37,16 +46,23 @@ def load_or_extract_facts(conn: sqlite3.Connection, llm, cv_path: Path) -> list[
     if cached:
         return cached
     text = extract_pdf_text(cv_path)
-    if not text.strip():
+    if not text:
         raise ValueError(f"aucun texte extrait de {cv_path} (PDF scanné ?)")
     data = llm.chat_json(SYSTEM, f"CV :\n\n{text[:6000]}", max_tokens=2000)
-    facts = data.get("facts") if isinstance(data, dict) else None
+    # Handle bare list response (common LLM drift)
+    if isinstance(data, list):
+        facts = data
+    else:
+        facts = data.get("facts") if isinstance(data, dict) else None
+    # Validate and filter to dict entries only
+    if isinstance(facts, list):
+        facts = [f for f in facts if isinstance(f, dict)]
     if not facts:
-        raise ValueError("le LLM n'a renvoyé aucun fait")
+        raise ValueError("le LLM n'a renvoyé aucun fait exploitable")
     conn.executemany(
         "INSERT INTO facts(cv_hash,kind,label,detail,tech,metric,period) VALUES (?,?,?,?,?,?,?)",
         [(h, f.get("kind", "skill"), f.get("label", ""), f.get("detail", ""),
-          json.dumps(f.get("tech") or [], ensure_ascii=False), f.get("metric", "") or "",
+          json.dumps(_tech_list(f.get("tech")), ensure_ascii=False), f.get("metric", "") or "",
           f.get("period", "") or "") for f in facts])
     conn.commit()
     return _load(conn, h)

@@ -59,6 +59,34 @@ def test_format_and_select(conn, fake_llm, tmp_path, monkeypatch):
 
 def test_empty_pdf_text_raises(conn, fake_llm, tmp_path, monkeypatch):
     cv = tmp_path / "cv.pdf"; cv.write_bytes(b"z")
-    monkeypatch.setattr(P, "extract_pdf_text", lambda p: "   ")
+    monkeypatch.setattr(P, "extract_pdf_text", lambda p: "")
     with pytest.raises(ValueError):
         P.load_or_extract_facts(conn, fake_llm, cv)
+
+
+def test_tech_string_normalized(conn, fake_llm, tmp_path, monkeypatch):
+    cv = tmp_path / "cv.pdf"; cv.write_bytes(b"z")
+    monkeypatch.setattr(P, "extract_pdf_text", lambda p: "x")
+    tech_string_json = json.dumps({"facts": [
+        {"kind": "skill", "label": "Outils", "detail": "", "tech": "LangChain, FAISS", "metric": "", "period": ""}
+    ]})
+    fake_llm.responses = [tech_string_json]
+    facts = P.load_or_extract_facts(conn, fake_llm, cv)
+    assert facts[0].tech == ["LangChain", "FAISS"]
+
+
+def test_non_dict_facts_and_bare_list(conn, fake_llm, tmp_path, monkeypatch):
+    cv = tmp_path / "cv.pdf"; cv.write_bytes(b"z")
+    monkeypatch.setattr(P, "extract_pdf_text", lambda p: "x")
+
+    # Test (a): non-dict entries should raise ValueError
+    bad_json = json.dumps({"facts": ["Python", "SQL"]})
+    fake_llm.responses = [bad_json]
+    with pytest.raises(ValueError, match="exploitable"):
+        P.load_or_extract_facts(conn, fake_llm, cv)
+
+    # Test (b): bare list response should work
+    bare_list_json = json.dumps([{"kind": "skill", "label": "Python", "detail": "", "tech": ["Python"], "metric": "", "period": ""}])
+    fake_llm.responses = [bare_list_json]
+    facts = P.load_or_extract_facts(conn, fake_llm, cv)
+    assert len(facts) == 1 and facts[0].label == "Python"
