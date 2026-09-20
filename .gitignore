@@ -8,3 +8,5 @@ data/
 .pytest_cache/
 docs/superpowers/plans/*.bak
 .superpowers/
+*.egg-info/
+.vscode/
