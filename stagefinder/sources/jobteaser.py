@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,8 +24,8 @@ def parse_jobteaser(html: str, location: str) -> list[RawJob]:
             continue
         href = link["href"]
         url = href if href.startswith("http") else BASE + href
-        # Extract external_id from href (last part after the last /)
-        external_id = href.rstrip("/").split("/")[-1] if href else None
+        # Extract external_id from href path (last part after the last /, excluding query/fragment)
+        external_id = urlsplit(href).path.rstrip("/").split("/")[-1] if href else None
         company = card.select_one(".job-offer-card__company")
         out.append(RawJob(source="jobteaser", external_id=external_id,
                           title=title.get_text(strip=True),
@@ -48,7 +48,7 @@ class JobTeaserSource:
         try:
             r = self._get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         except requests.exceptions.RequestException as e:
-            log.warning("jobteaser %r: %s", keyword, e)
+            log.warning("jobteaser %r: %s", keyword, e, exc_info=True)
             return []
         if r is None or r.status_code != 200:
             log.warning("jobteaser status %s", getattr(r, "status_code", None))

@@ -35,7 +35,14 @@ def _default_scrape(**kw):
 
 def rows_to_rawjobs(df: pd.DataFrame) -> list[RawJob]:
     def s(v) -> str:
-        return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)
+        if v is None:
+            return ""
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):  # listes/arrays : pd.isna non scalaire
+            pass
+        return str(v)
 
     out = []
     for _, r in df.iterrows():
@@ -70,7 +77,7 @@ class JobSpySource:
         try:
             df = self._scrape(**kw)
         except Exception as e:  # le scraper tiers lève des exceptions variées
-            log.warning("jobspy %r @ %r: %s", keyword, location, e)
+            log.warning("jobspy %r @ %r: %s", keyword, location, e, exc_info=True)
             return []
         if df is None or df.empty:
             return []
