@@ -15,6 +15,23 @@ lettres de motivation ancrées sur les faits du CV. Tout en local (SQLite).
     python -m stagefinder.cli letters regenerate <job_id> --campaign <id> --instruction "plus court" --language en
     python -m stagefinder.cli jobs retry-failed --stage enrich|score|letter [--campaign <id>]
 
+## Tableau de bord
+
+    streamlit run stagefinder/dashboard/app.py
+
+Cinq écrans : Campagnes (création, suggestion IA des mots-clés, lancement d'un run),
+Run (suivi en direct), Offres (table triée par score, marquage manuel des doublons),
+Lettres (lecture, régénération, export .docx), Suivi (statut des candidatures).
+Le bouton « Lancer » démarre `stagefinder run` en sous-processus : fermer l'onglet du
+navigateur n'interrompt pas un run en cours.
+
+## Suggestion IA des mots-clés
+
+    python -m stagefinder.cli campaign suggest <id>              # affiche les suggestions
+    python -m stagefinder.cli campaign suggest <id> --apply      # les ajoute (origin=ai)
+    python -m stagefinder.cli campaign terms <id>                # liste les termes actuels
+    python -m stagefinder.cli campaign term-toggle <term_id> --enable|--disable
+
 ## Première utilisation
 
 1. **Créer `.env` à partir de `.env.example`** avec une **nouvelle** clé OpenRouter (révoquer l'ancienne sur openrouter.ai/settings/keys).

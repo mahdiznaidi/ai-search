@@ -239,8 +239,44 @@ def _page_letters() -> None:
                     st.error(f"Échec de la régénération : {e}")
 
 
+def _page_tracking() -> None:
+    st.header("Suivi des candidatures")
+    conn = _conn()
+
+    jobs = conn.execute(
+        "SELECT id, title, company FROM jobs WHERE status IN "
+        "('letter_ready','applied','answered','rejected') ORDER BY id DESC").fetchall()
+    if not jobs:
+        st.info("Aucune offre avec lettre prête pour l'instant.")
+        return
+
+    options = {j["id"]: f"{j['title']} — {j['company']}" for j in jobs}
+    jid = st.selectbox("Offre", list(options.keys()), format_func=lambda i: options[i],
+                       key="tracking_job_select")
+
+    applied_at = st.date_input("Date de candidature", key="tracking_applied_at")
+    channel = st.selectbox("Canal", ["email", "site carrière", "LinkedIn", "autre"],
+                           key="tracking_channel")
+    outcome = st.selectbox("Statut", ["pending", "interview", "rejected", "offer"],
+                           key="tracking_outcome")
+    notes = st.text_area("Notes", key="tracking_notes")
+
+    if st.button("Enregistrer", key="save_tracking"):
+        D.upsert_application(conn, jid, None, str(applied_at), channel, outcome, notes)
+        st.success("Candidature enregistrée.")
+        st.rerun()
+
+    st.divider()
+    st.subheader("Historique")
+    for a in D.list_applications(conn):
+        st.markdown(f"**{a['title']}** — {a['company']} — statut : {a['outcome']} "
+                   f"({a['applied_at']}, {a['channel']})")
+        if a["notes"]:
+            st.caption(a["notes"])
+
+
 PAGES = {"Campagnes": _page_campaigns, "Run": _page_run, "Offres": _page_jobs,
-         "Lettres": _page_letters}
+         "Lettres": _page_letters, "Suivi": _page_tracking}
 
 
 def main() -> None:

@@ -171,3 +171,32 @@ def test_letters_page_lists_and_downloads(env):
     # UnknownElement) : on vérifie seulement que la page ne plante pas en le rendant, et que le
     # texte de la lettre est bien lu depuis le fichier .docx généré au préalable.
     assert docx_path.exists()
+
+
+def test_tracking_page_records_application(env):
+    from stagefinder import db
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    jid = upsert_job(conn, RawJob("indeed", "a", "Stage A", "Co", "Paris", "https://x/a", "d"),
+                     cid, "k", "l").job_id
+    conn.execute("UPDATE jobs SET status='letter_ready' WHERE id=?", (jid,))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Suivi").run()
+    at.selectbox(key="tracking_job_select").set_value(jid).run()
+    at.selectbox(key="tracking_outcome").set_value("interview").run()
+    at.text_area(key="tracking_notes").set_value("Entretien le 25/09").run()
+    at.button(key="save_tracking").click().run()
+    assert not at.exception
+
+    conn2 = db.connect(env["db_path"])
+    row = conn2.execute("SELECT outcome, notes FROM applications WHERE job_id=?", (jid,)).fetchone()
+    assert row["outcome"] == "interview" and "25/09" in row["notes"]
+
+    assert any("interview" in m.value for m in at.markdown)
