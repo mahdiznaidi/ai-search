@@ -1,0 +1,30 @@
+[project]
+name = "stagefinder"
+version = "2.0.0"
+requires-python = ">=3.11"
+dependencies = [
+  "python-jobspy==1.1.82",
+  "requests",
+  "beautifulsoup4",
+  "PyPDF2",
+  "rapidfuzz",
+  "langdetect",
+  "python-docx",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+stagefinder = "stagefinder.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["stagefinder*"]

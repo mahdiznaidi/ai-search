@@ -6,4 +6,5 @@ data/
 *.docx
 *.pdf
 .pytest_cache/
+docs/superpowers/plans/*.bak
 .superpowers/
