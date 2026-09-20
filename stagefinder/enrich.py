@@ -52,6 +52,14 @@ def _fail(conn: sqlite3.Connection, job_id: int, reason: str) -> None:
     conn.commit()
 
 
+def _raise(msg: str):
+    """Callable `fetch`-compatible qui relève l'erreur déjà survenue dans le pool de threads,
+    pour laisser enrich_job appliquer sa seule règle de repli (page -> description -> échec)."""
+    def f(url: str, timeout: int = 15):
+        raise RuntimeError(msg)
+    return f
+
+
 DESC_FETCH_THRESHOLD = 500
 
 
@@ -136,8 +144,8 @@ def enrich_pending(conn: sqlite3.Connection, llm, fetch=fetch_page, workers: int
             continue
         page, err = pages_by_id[job_id]
         if err is not None:
-            _fail(conn, job_id, f"fetch: {err}")
-            counters["failed"] += 1
+            ok = enrich_job(conn, llm, job_id, fetch=_raise(err))
+            counters["enriched" if ok else "failed"] += 1
             continue
         ok = enrich_job(conn, llm, job_id, page=page)
         counters["enriched" if ok else "failed"] += 1

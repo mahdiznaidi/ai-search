@@ -129,6 +129,21 @@ def test_enrich_pending_does_not_fetch_long_description_rows(conn, fake_llm):
     assert json.loads(row["enriched"])["text_source"] == "search_description"
 
 
+def test_enrich_pending_falls_back_to_description_on_fetch_error(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+    conn.execute("UPDATE jobs SET description='Stage data science, missions : analyse de "
+                 "données avec Python.' WHERE id=?", (jid,)); conn.commit()
+    fake_llm.responses = [ENRICHED]
+
+    def boom(u, timeout=15):
+        raise RuntimeError("403")
+    c = E.enrich_pending(conn, fake_llm, fetch=boom)
+    assert c == {"enriched": 1, "failed": 0}
+    row = conn.execute("SELECT status, enriched FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "enriched"
+    assert json.loads(row["enriched"])["text_source"] == "search_description"
+
+
 def test_enrich_pending_skips_duplicates(conn, fake_llm):
     _, (jid,) = _seed(conn)
     conn.execute("UPDATE jobs SET status='duplicate'"); conn.commit()
