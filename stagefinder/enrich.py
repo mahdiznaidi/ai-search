@@ -18,8 +18,16 @@ log = logging.getLogger(__name__)
 SYSTEM = """Tu lis une offre d'emploi et tu en extrais une structure JSON stricte :
 {"missions": "résumé fidèle des missions en 2-4 phrases, dans la langue de l'offre",
  "requirements": ["exigences / profil recherché, une par entrée"],
- "tech_stack": ["technologies, outils, langages explicitement cités"],
+ "tech_stack": ["outils, langages, frameworks et plateformes NOMMÉS explicitement cités"],
  "team_context": "équipe, produit, contexte, 1-2 phrases ou \"\""}
+
+Règle stricte pour "tech_stack" : uniquement des noms propres d'outils, langages, frameworks,
+bibliothèques ou plateformes concrets (ex: Python, Docker, LangChain, PostgreSQL, AWS, Kubernetes).
+N'y mets JAMAIS un domaine, un champ ou une discipline générique, même s'il est cité dans l'offre
+(exclus : "Intelligence Artificielle", "Machine Learning", "IA générative", "Data Science",
+"Generative AI", "LLMs" en tant que catégorie, "Deep Learning", "NLP", "Big Data"). Si l'offre ne
+cite aucun outil nommé, laisse "tech_stack" vide plutôt que d'y mettre le domaine du poste.
+
 N'invente rien : si une information est absente, laisse une chaîne vide ou une liste vide."""
 
 

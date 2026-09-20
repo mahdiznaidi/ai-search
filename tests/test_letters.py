@@ -74,6 +74,13 @@ def test_validate_flags_unknown_number(conn):
     assert any("250" in i for i in L.validate_letter(body, _job(conn, jid), FACTS[:1], [], "fr"))
 
 
+def test_validate_flags_unresolved_placeholder(conn):
+    _, jid = _seed(conn)
+    body = GOOD.replace("Cordialement", "Cordialement,\n[Votre Nom]")
+    issues = L.validate_letter(body, _job(conn, jid), FACTS[:1], [], "fr")
+    assert any("placeholder" in i for i in issues)
+
+
 def test_generate_for_job_success(conn, fake_llm, tmp_path):
     camp, jid = _seed(conn)
     fake_llm.responses = [json.dumps(ANGLE), GOOD]

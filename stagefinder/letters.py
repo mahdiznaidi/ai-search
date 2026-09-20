@@ -21,7 +21,8 @@ BLACKLIST = {
            "drive business value", "drive business growth", "team player", "think outside the box",
            "i am confident that", "fast learner"],
     "fr": ["très motivé", "rigoureux et", "force de proposition", "esprit d'équipe",
-           "je suis convaincu que", "passionné par", "dynamique et", "polyvalent"],
+           "je suis convaincu que", "passionné par", "dynamique et", "polyvalent",
+           "je suis enthousiaste à l'idée de", "seront un atout", "mes compétences techniques et mes expériences"],
 }
 LANG_NAMES = {"fr": "français", "en": "anglais", "de": "allemand", "es": "espagnol", "it": "italien"}
 
@@ -29,19 +30,33 @@ ANGLE_SYSTEM = """Tu prépares une lettre de motivation. Tu ne rédiges PAS : tu
 À partir de l'offre et des FAITS du candidat (identifiés par [id]), produis un JSON strict :
 {"language": "{lang}",
  "company_hooks": ["2-3 éléments précis de l'offre/entreprise à reprendre"],
- "pairs": [{"requirement": "exigence de l'offre", "fact_id": <id>, "why": "en quoi ce fait y répond, concrètement"}],
+ "pairs": [{"requirement": "exigence de l'offre", "fact_id": <id>, "why": "en quoi ce fait y répond, avec le détail ou le chiffre concret du fait"}],
  "gaps": ["exigences que les faits ne couvrent pas"],
  "opening_angle": "l'idée d'accroche, une phrase"}
-Choisis 2 à 3 paires maximum. Un fact_id doit exister dans la liste. Ne crée aucun fait."""
+
+Règles de sélection des faits, dans cet ordre de préférence :
+1. Priorité absolue aux faits "project"/"experience"/"achievement" qui portent un chiffre (metric) ou une réalisation nommée — jamais un fait "skill" tant qu'un fait project/experience concret couvre la même exigence.
+2. Un fait "skill" (liste d'outils) n'est acceptable que si aucun project/experience du candidat ne touche à cette exigence.
+3. "why" doit citer le détail concret ou le chiffre du fait (ex: "pipeline ayant traité 10 000+ articles", pas "le candidat est compétent en Python").
+4. Une paire dont le "why" ne fait que reformuler l'exigence sans preuve concrète est inutile : n'en propose pas.
+
+Choisis 2 à 3 paires maximum, les plus fortes. Un fact_id doit exister dans la liste. Ne crée aucun fait."""
 
 WRITE_SYSTEM = """Tu rédiges une lettre de motivation en {lang_name}, {min}-{max} mots, prête à envoyer.
+{min} mots est un MINIMUM à respecter, pas une cible haute : une lettre de {min_minus} mots est un échec.
+Si le contenu concret semble s'épuiser avant {min} mots, développe davantage le lien entre chaque fait
+cité et l'exigence du poste (le contexte du projet, la méthode utilisée, le résultat obtenu) plutôt que
+d'ajouter une phrase générique.
 Règles absolues :
-- Tu n'utilises QUE les faits fournis ci-dessous. Aucune expérience, techno, chiffre ou diplôme hors de cette liste.
-- Chaque paragraphe central relie UNE exigence de l'offre à UN fait, en expliquant le lien (pas d'affirmation sans preuve).
+- Tu n'utilises QUE les faits fournis ci-dessous, et tu dois citer leur contenu concret (le projet, l'outil précis, le chiffre) — jamais une paraphrase de l'exigence du poste.
+- N'évoque JAMAIS un outil, une techno ou une méthode qui vient de l'offre (stack, missions, contexte) si elle n'apparaît pas explicitement dans les FAITS ci-dessous, même pour dire que tu es "à l'aise avec" ou "familier de" — ne mentionne que ce que tes faits prouvent réellement.
+- Chaque paragraphe central relie UNE exigence de l'offre à UN fait : nomme le projet/l'expérience, cite le chiffre ou l'outil exact, puis dis en une phrase pourquoi cela répond au besoin. N'écris jamais une phrase qui pourrait s'appliquer à n'importe quel candidat (interdit : "je maîtrise X, ce qui est essentiel pour Y", "mon expérience correspond parfaitement à l'exigence de Z").
+- N'évoque jamais un manque, une lacune ou une expérience insuffisante : si un gap existe, ignore-le silencieusement plutôt que de t'excuser.
+- Le dernier paragraphe avant la formule de politesse doit lui aussi s'appuyer sur un fait concret ou l'accroche entreprise — jamais une clôture générique du type "je suis convaincu que mes compétences seront un atout" ou "je suis enthousiaste à l'idée de rejoindre l'équipe".
 - Cite le nom exact de l'entreprise et l'intitulé exact du poste.
-- Interdit : {blacklist}.
-- Pas de titre, pas d'objet, pas de coordonnées : commence par la formule d'appel, termine par la formule de politesse.
-- Ton : direct, précis, sans flatterie.
+- Interdit, sous toute forme même reformulée : {blacklist}.
+- Pas de titre, pas d'objet, pas de coordonnées, pas de préambule ("Voici la lettre", markdown, ```) : commence directement par la formule d'appel, termine par la formule de politesse SEULE, sans nom ni placeholder de type "[Votre Nom]", "[Nom Prénom]" ou toute mention entre crochets.
+- Ton : direct, factuel, sans flatterie ni superlatif.
 {instruction}"""
 
 
@@ -106,6 +121,7 @@ def write_letter(llm, job, angle: dict, cited: list[Fact], language: str,
                  instruction: str = "", feedback: list[str] | None = None) -> str:
     system = WRITE_SYSTEM.format(
         lang_name=LANG_NAMES.get(language, language), min=MIN_WORDS, max=MAX_WORDS,
+        min_minus=MIN_WORDS - 30,
         blacklist=", ".join(BLACKLIST.get(language, BLACKLIST["en"])),
         instruction=f"Consigne supplémentaire : {instruction}" if instruction else "")
     user = (f"{_job_block(job)}\n\nANGLE :\n{json.dumps(angle, ensure_ascii=False)}\n\n"
@@ -134,6 +150,8 @@ def validate_letter(body: str, job, cited: list[Fact], job_tech: list[str],
     for phrase in BLACKLIST.get(language, []):
         if phrase in low:
             issues.append(f"formule interdite : « {phrase} »")
+    if re.search(r"\[[^\]]{2,40}\]", body):
+        issues.append("placeholder entre crochets non résolu (ex: [Votre Nom])")
     company_norm = normalize_company(job["company"])
     if not company_norm:
         issues.append("nom de l'entreprise inconnu")
