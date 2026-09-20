@@ -4,6 +4,7 @@ import pytest
 
 from stagefinder import db, enrich as E
 from stagefinder.dedup import upsert_job
+from stagefinder.llm import BudgetExceeded, LLMError
 from stagefinder.models import RawJob, create_campaign
 
 PAGE = """<html><head><title>x</title><script>var a=1</script></head><body>
@@ -77,3 +78,43 @@ def test_enrich_pending_skips_duplicates(conn, fake_llm):
     _, (jid,) = _seed(conn)
     conn.execute("UPDATE jobs SET status='duplicate'"); conn.commit()
     assert E.enrich_pending(conn, fake_llm, fetch=lambda u, timeout=15: PAGE) == {"enriched": 0, "failed": 0}
+
+
+def test_enrich_job_non_dict_response_marks_failed(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+    fake_llm.responses = ["[1, 2]"]
+    assert not E.enrich_job(conn, fake_llm, jid, fetch=lambda u, timeout=15: PAGE)
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "failed_enrich" and "llm:" in row["failure_reason"]
+
+
+def test_enrich_job_llm_error_marks_failed(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+
+    def boom():
+        raise LLMError("x")
+    fake_llm.responses = [boom]
+    assert not E.enrich_job(conn, fake_llm, jid, fetch=lambda u, timeout=15: PAGE)
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "failed_enrich" and row["failure_reason"].startswith("llm:")
+
+
+def test_enrich_pending_propagates_budget_exceeded(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+
+    def boom():
+        raise BudgetExceeded("plafond")
+    fake_llm.responses = [boom]
+    with pytest.raises(BudgetExceeded):
+        E.enrich_pending(conn, fake_llm, fetch=lambda u, timeout=15: PAGE)
+    row = conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "discovered"
+
+
+def test_enrich_job_no_usable_text_marks_failed(conn, fake_llm):
+    _, (jid,) = _seed(conn)
+    conn.execute("UPDATE jobs SET description='' WHERE id=?", (jid,)); conn.commit()
+    assert not E.enrich_job(conn, fake_llm, jid, fetch=lambda u, timeout=15: "<html></html>")
+    row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (jid,)).fetchone()
+    assert row["status"] == "failed_enrich" and row["failure_reason"] == "aucun texte exploitable"
+    assert fake_llm.calls == 0

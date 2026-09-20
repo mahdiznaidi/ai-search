@@ -10,7 +10,6 @@ import requests
 from bs4 import BeautifulSoup
 from langdetect import DetectorFactory, LangDetectException, detect
 
-from stagefinder.db import now
 from stagefinder.llm import BudgetExceeded, LLMError
 
 DetectorFactory.seed = 0
@@ -73,6 +72,9 @@ def enrich_job(conn: sqlite3.Connection, llm, job_id: int, fetch=fetch_page,
         raise
     except LLMError as e:
         _fail(conn, job_id, f"llm: {e}")
+        return False
+    if not isinstance(data, dict):
+        _fail(conn, job_id, "llm: réponse non conforme (objet JSON attendu)")
         return False
     enriched = {"missions": str(data.get("missions", "")),
                 "requirements": [str(x) for x in data.get("requirements", []) or []],
