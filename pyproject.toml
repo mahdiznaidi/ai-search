@@ -6,7 +6,7 @@ dependencies = [
   "python-jobspy==1.1.82",
   "requests",
   "beautifulsoup4",
-  "PyPDF2",
+  "pypdf",
   "rapidfuzz",
   "langdetect",
   "python-docx",

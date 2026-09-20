@@ -6,7 +6,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-import PyPDF2
+from pypdf import PdfReader
 
 from stagefinder.models import Fact, row_to_fact
 
@@ -31,7 +31,7 @@ def _tech_list(v) -> list[str]:
 
 def extract_pdf_text(path: Path) -> str:
     with path.open("rb") as f:
-        reader = PyPDF2.PdfReader(f)
+        reader = PdfReader(f)
         return "\n".join((p.extract_text() or "") for p in reader.pages).strip()
 
 
