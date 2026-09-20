@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -9,6 +10,10 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from stagefinder.models import Fact, row_to_fact
+
+log = logging.getLogger(__name__)
+
+CV_MAX_CHARS = 15000
 
 SYSTEM = """Tu extrais d'un CV des FAITS atomiques et vérifiables, pour rédiger des lettres de motivation.
 Chaque fait : {"kind": "experience|project|skill|education|achievement", "label": "titre court",
@@ -48,7 +53,9 @@ def load_or_extract_facts(conn: sqlite3.Connection, llm, cv_path: Path) -> list[
     text = extract_pdf_text(cv_path)
     if not text:
         raise ValueError(f"aucun texte extrait de {cv_path} (PDF scanné ?)")
-    data = llm.chat_json(SYSTEM, f"CV :\n\n{text[:6000]}", max_tokens=2000)
+    if len(text) > CV_MAX_CHARS:
+        log.warning("CV %s tronqué à %d caractères (longueur %d)", cv_path, CV_MAX_CHARS, len(text))
+    data = llm.chat_json(SYSTEM, f"CV :\n\n{text[:CV_MAX_CHARS]}", max_tokens=2000)
     # Handle bare list response (common LLM drift)
     if isinstance(data, list):
         facts = data

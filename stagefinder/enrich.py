@@ -52,17 +52,28 @@ def _fail(conn: sqlite3.Connection, job_id: int, reason: str) -> None:
     conn.commit()
 
 
+DESC_FETCH_THRESHOLD = 500
+
+
 def enrich_job(conn: sqlite3.Connection, llm, job_id: int, fetch=fetch_page,
                page: str | None = None) -> bool:
     row = conn.execute("SELECT url, description FROM jobs WHERE id=?", (job_id,)).fetchone()
-    try:
-        html = page if page is not None else fetch(row["url"], timeout=15)
-    except Exception as e:
-        _fail(conn, job_id, f"fetch: {e}")
-        return False
-    text = html_to_text(html)
-    if len(text) < 200:  # page vide / anti-bot : on retombe sur la description courte
-        text = htmllib.unescape(row["description"] or "")
+    desc = htmllib.unescape(row["description"] or "")
+    if len(desc) >= DESC_FETCH_THRESHOLD:
+        text, source = desc, "search_description"
+    else:
+        try:
+            html = page if page is not None else fetch(row["url"], timeout=15)
+        except Exception as e:
+            if desc.strip():
+                text, source = desc, "search_description"
+            else:
+                _fail(conn, job_id, f"fetch: {e}")
+                return False
+        else:
+            text, source = html_to_text(html), "page"
+            if len(text) < 200 and desc.strip():  # page vide / anti-bot : on retombe sur la description
+                text, source = desc, "search_description"
     if not text.strip():
         _fail(conn, job_id, "aucun texte exploitable")
         return False
@@ -79,22 +90,31 @@ def enrich_job(conn: sqlite3.Connection, llm, job_id: int, fetch=fetch_page,
     enriched = {"missions": str(data.get("missions", "")),
                 "requirements": [str(x) for x in data.get("requirements", []) or []],
                 "tech_stack": [str(x) for x in data.get("tech_stack", []) or []],
-                "team_context": str(data.get("team_context", ""))}
+                "team_context": str(data.get("team_context", "")),
+                "text_source": source}
+    lang_text = enriched["missions"] + " " + " ".join(enriched["requirements"])
+    language = detect_language(lang_text) if len(lang_text) >= 40 else detect_language(text)
     conn.execute(
         "UPDATE jobs SET status='enriched', full_description=?, enriched=?, language=?, "
         "failure_reason=NULL WHERE id=?",
-        (text, json.dumps(enriched, ensure_ascii=False), detect_language(text), job_id))
+        (text, json.dumps(enriched, ensure_ascii=False), language, job_id))
     conn.commit()
     return True
 
 
 def enrich_pending(conn: sqlite3.Connection, llm, fetch=fetch_page, workers: int = 4) -> dict:
     rows = conn.execute(
-        "SELECT id, url FROM jobs WHERE status='discovered' AND duplicate_of IS NULL ORDER BY id"
+        "SELECT id, url, description FROM jobs WHERE status='discovered' AND duplicate_of IS NULL "
+        "ORDER BY id"
     ).fetchall()
     counters = {"enriched": 0, "failed": 0}
     if not rows:
         return counters
+
+    def _is_long_desc(r) -> bool:
+        return len(htmllib.unescape(r["description"] or "")) >= DESC_FETCH_THRESHOLD
+
+    to_fetch = [r for r in rows if not _is_long_desc(r)]
 
     def get(r):
         try:
@@ -102,10 +122,19 @@ def enrich_pending(conn: sqlite3.Connection, llm, fetch=fetch_page, workers: int
         except Exception as e:
             return r["id"], None, str(e)
 
-    # I/O réseau en parallèle ; LLM + écriture SQLite en série sur le thread principal
+    # I/O réseau en parallèle (uniquement pour les offres à description courte) ;
+    # LLM + écriture SQLite en série sur le thread principal
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        pages = list(ex.map(get, rows))
-    for job_id, page, err in pages:
+        pages = list(ex.map(get, to_fetch))
+    pages_by_id = {job_id: (page, err) for job_id, page, err in pages}
+
+    for r in rows:
+        job_id = r["id"]
+        if _is_long_desc(r):
+            ok = enrich_job(conn, llm, job_id, fetch=fetch, page=None)
+            counters["enriched" if ok else "failed"] += 1
+            continue
+        page, err = pages_by_id[job_id]
         if err is not None:
             _fail(conn, job_id, f"fetch: {err}")
             counters["failed"] += 1

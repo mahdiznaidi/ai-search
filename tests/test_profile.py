@@ -75,6 +75,18 @@ def test_tech_string_normalized(conn, fake_llm, tmp_path, monkeypatch):
     assert facts[0].tech == ["LangChain", "FAISS"]
 
 
+def test_cv_truncated_at_15000_chars_and_logs_warning(conn, fake_llm, tmp_path, monkeypatch, caplog):
+    import logging as _logging
+    cv = tmp_path / "cv.pdf"; cv.write_bytes(b"z")
+    long_text = "x" * 16000
+    monkeypatch.setattr(P, "extract_pdf_text", lambda p: long_text)
+    fake_llm.responses = [FACTS_JSON]
+    with caplog.at_level(_logging.WARNING, logger="stagefinder.profile"):
+        P.load_or_extract_facts(conn, fake_llm, cv)
+    assert len(fake_llm.prompts[0][1]) <= 15000 + len("CV :\n\n")
+    assert any("tronqué" in r.message for r in caplog.records)
+
+
 def test_non_dict_facts_and_bare_list(conn, fake_llm, tmp_path, monkeypatch):
     cv = tmp_path / "cv.pdf"; cv.write_bytes(b"z")
     monkeypatch.setattr(P, "extract_pdf_text", lambda p: "x")

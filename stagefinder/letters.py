@@ -11,7 +11,7 @@ from stagefinder.db import now
 from stagefinder.dedup import normalize_company, normalize_title
 from stagefinder.enrich import detect_language
 from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
-from stagefinder.models import Campaign, Fact
+from stagefinder.models import Campaign, Fact, load_enriched
 from stagefinder.profile import facts_by_ids, format_facts
 
 MIN_WORDS, MAX_WORDS = 250, 350
@@ -45,20 +45,23 @@ Règles absolues :
 {instruction}"""
 
 
-def _lang_for(campaign: Campaign, job: sqlite3.Row, override: str | None) -> str:
+def _lang_for(campaign: Campaign, job: sqlite3.Row, override: str | None) -> tuple[str, bool]:
+    """Retourne (langue, fallback) : fallback est vrai quand `auto` n'a pas pu suivre l'offre."""
     if override:
-        return override
+        return override, False
     if campaign.letter_language != "auto":
-        return campaign.letter_language
+        return campaign.letter_language, False
     lang = job["language"] or "und"
-    return lang if lang in LANG_NAMES else "en"
+    if lang in LANG_NAMES:
+        return lang, False
+    return "en", True
 
 
 def _job_block(job: sqlite3.Row) -> str:
-    e = json.loads(job["enriched"] or "{}")
+    e = load_enriched(job)
     return (f"Poste : {job['title']}\nEntreprise : {job['company']}\nLieu : {job['location']}\n"
-            f"Missions : {e.get('missions', '')}\nExigences : {'; '.join(e.get('requirements', []))}\n"
-            f"Stack : {', '.join(e.get('tech_stack', []))}\nContexte : {e.get('team_context', '')}\n"
+            f"Missions : {e['missions']}\nExigences : {'; '.join(e['requirements'])}\n"
+            f"Stack : {', '.join(e['tech_stack'])}\nContexte : {e['team_context']}\n"
             f"Extrait : {(job['full_description'] or job['description'] or '')[:1500]}")
 
 
@@ -80,6 +83,25 @@ def build_angle(llm, job, facts: list[Fact], reasons: list[str], language: str,
     return angle
 
 
+_FENCE_BLOCK = re.compile(r"```(?:[a-zA-Z]*\n)?(.*?)```", re.S)
+_SALUTATION = re.compile(r"^(Madame|Monsieur|Dear|Bonjour|Hello|Sehr|Estimad)", re.I)
+
+
+def _strip_llm_chrome(text: str) -> str:
+    m = _FENCE_BLOCK.search(text)
+    if m:
+        text = m.group(1)
+    text = text.replace("**", "").replace("__", "")
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if not s:
+            continue
+        if s.endswith((",", ":")) or _SALUTATION.match(s):
+            return "\n".join(lines[i:]).strip()
+    return text.strip()
+
+
 def write_letter(llm, job, angle: dict, cited: list[Fact], language: str,
                  instruction: str = "", feedback: list[str] | None = None) -> str:
     system = WRITE_SYSTEM.format(
@@ -93,14 +115,15 @@ def write_letter(llm, job, angle: dict, cited: list[Fact], language: str,
     if feedback:
         user += "\n\nTa version précédente a été rejetée pour : " + " | ".join(feedback) + \
                 "\nCorrige ces points précisément."
-    return llm.chat(system, user, temperature=0.4, max_tokens=900).strip()
+    raw = llm.chat(system, user, temperature=0.4, max_tokens=900).strip()
+    return _strip_llm_chrome(raw)
 
 
 _NUM = re.compile(r"\b\d[\d  .,]*\d\b|\b\d\b")
 
 
 def validate_letter(body: str, job, cited: list[Fact], job_tech: list[str],
-                    language: str) -> list[str]:
+                    language: str, all_facts: list[Fact] | None = None) -> list[str]:
     issues = []
     low = body.lower()
     words = len(body.split())
@@ -123,6 +146,13 @@ def validate_letter(body: str, job, cited: list[Fact], job_tech: list[str],
     for tech in job_tech:
         if re.search(rf"(?<!\w){re.escape(tech.lower())}(?!\w)", low) and tech.lower() not in cited_tech:
             issues.append(f"techno revendiquée hors faits cités : {tech}")
+    if all_facts is not None:
+        all_tech = {t for f in all_facts for t in f.tech}
+        for tech in all_tech:
+            if tech.lower() in cited_tech:
+                continue
+            if re.search(rf"(?<!\w){re.escape(tech.lower())}(?!\w)", low):
+                issues.append(f"techno hors faits cités : {tech}")
     allowed = " ".join(f"{f.detail} {f.metric} {f.period} {f.label}" for f in cited).lower()
     allowed += " " + (job["full_description"] or "").lower()
     allowed_nums = {re.sub(r"[  .,]", "", n) for n in _NUM.findall(allowed)}
@@ -152,16 +182,24 @@ def generate_for_job(conn: sqlite3.Connection, llm, job_id: int, campaign: Campa
     sc = conn.execute("SELECT reasons FROM scores WHERE job_id=? AND campaign_id=?",
                       (job_id, campaign.id)).fetchone()
     reasons = json.loads(sc["reasons"]) if sc and sc["reasons"] else []
-    lang = _lang_for(campaign, job, language)
-    job_tech = json.loads(job["enriched"] or "{}").get("tech_stack", [])
+    lang, lang_fallback = _lang_for(campaign, job, language)
+    job_tech = load_enriched(job)["tech_stack"]
+    extra_warnings = []
+    if lang_fallback:
+        extra_warnings.append("langue de l'offre inconnue : anglais utilisé par défaut")
     try:
         angle = build_angle(llm, job, facts, reasons, lang, instruction)
-        cited = facts_by_ids(facts, [p["fact_id"] for p in angle["pairs"]]) or facts[:3]
+        pair_ids = [p["fact_id"] for p in angle["pairs"]]
+        cited = facts_by_ids(facts, pair_ids)
+        if not cited:
+            cited = facts[:3]
+            extra_warnings.append("angle sans paire valide : 3 premiers faits utilisés")
         body = write_letter(llm, job, angle, cited, lang, instruction)
-        issues = validate_letter(body, job, cited, job_tech, lang)
+        issues = validate_letter(body, job, cited, job_tech, lang, facts)
         if issues:
             body = write_letter(llm, job, angle, cited, lang, instruction, feedback=issues)
-            issues = validate_letter(body, job, cited, job_tech, lang)
+            issues = validate_letter(body, job, cited, job_tech, lang, facts)
+        issues = extra_warnings + issues
     except (BudgetExceeded, LLMFatal):
         raise
     except LLMError as e:

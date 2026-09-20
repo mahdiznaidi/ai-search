@@ -60,6 +60,17 @@ def test_jobspy_search_swallows_scraper_error_as_empty(caplog):
     assert any("boom" in record.message for record in caplog.records)
 
 
+def test_jobspy_search_malformed_row_yields_empty(caplog):
+    df = pd.DataFrame([{
+        "id": "in-x", "site": "indeed", "job_url": "https://fr.indeed.com/viewjob?jk=x",
+        "title": "Stage", "company": "Co", "location": "Paris",
+        "date_posted": ["not", "a", "date"], "description": "d",
+    }])
+    with caplog.at_level(logging.WARNING, logger="stagefinder.sources.jobspy_src"):
+        result = JobSpySource(scrape=lambda **kw: df).search("a", "b", "FR", None, None, False, 5)
+    assert result == []
+
+
 def test_parse_jobteaser_fixture():
     html = (FIX / "jobteaser.html").read_text(encoding="utf-8")
     jobs = parse_jobteaser(html, "Paris")

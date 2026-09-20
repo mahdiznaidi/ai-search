@@ -2,7 +2,7 @@ import pytest
 
 from stagefinder import db
 from stagefinder.models import (add_terms, campaign_terms, create_campaign,
-                                load_campaign)
+                                load_campaign, load_enriched)
 
 
 @pytest.fixture
@@ -34,3 +34,33 @@ def test_terms_filtered_by_kind_and_enabled(conn):
     assert campaign_terms(conn, cid, "keyword") == ["stage data"]
     assert campaign_terms(conn, cid, "exclude") == ["senior"]
     assert campaign_terms(conn, cid, "location") == []
+
+
+class _Row(dict):
+    def __getitem__(self, k):
+        return dict.get(self, k)
+
+
+def test_load_enriched_defaults_on_malformed_json():
+    row = _Row(enriched="{not valid json")
+    e = load_enriched(row)
+    assert e == {"missions": "", "requirements": [], "tech_stack": [], "team_context": "",
+                 "text_source": ""}
+
+
+def test_load_enriched_defaults_on_missing_keys():
+    row = _Row(enriched='{"missions": "x"}')
+    e = load_enriched(row)
+    assert e["missions"] == "x"
+    assert e["requirements"] == [] and e["tech_stack"] == [] and e["team_context"] == ""
+    assert e["text_source"] == ""
+
+
+def test_load_enriched_reads_all_fields():
+    import json as _json
+    row = _Row(enriched=_json.dumps({"missions": "m", "requirements": ["r"],
+                                     "tech_stack": ["Python"], "team_context": "c",
+                                     "text_source": "page"}))
+    e = load_enriched(row)
+    assert e == {"missions": "m", "requirements": ["r"], "tech_stack": ["Python"],
+                "team_context": "c", "text_source": "page"}

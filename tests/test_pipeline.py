@@ -67,8 +67,19 @@ def test_discover_builds_matrix_and_dedups(conn):
     src = FakeSource(_jobs())
     c = PL.discover(conn, load_campaign(conn, cid), [src], limit=5, workers=2)
     assert sorted(src.queries) == sorted([(k, l) for k in ["stage data", "stage ml"] for l in ["Paris", "Lyon"]])
-    assert c["found"] == 8 and c["new"] == 2 and c["duplicates"] == 1
+    assert c["found"] == 8 and c["inserted"] == 2 and c["new"] == 1 and c["duplicates"] == 1
     assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
+
+
+def test_discover_raises_when_no_active_keywords(conn):
+    cid = create_campaign(conn, "empty", "i", "FR")
+    with pytest.raises(ValueError, match="mot-clé"):
+        PL.discover(conn, load_campaign(conn, cid), [FakeSource([])])
+
+
+def test_discover_default_workers_is_two():
+    import inspect
+    assert inspect.signature(PL.discover).parameters["workers"].default == 2
 
 
 def test_discover_skips_unsupported_source(conn):
@@ -98,7 +109,7 @@ def test_run_campaign_end_to_end_and_idempotent(conn, settings, fake_llm):
     run = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
     assert run["status"] == "done" and run["stage"] == "generate"
     counters = json.loads(run["counters"])
-    assert counters["new"] == 2 and counters["enriched"] == 1
+    assert counters["inserted"] == 2 and counters["new"] == 1 and counters["enriched"] == 1
     assert counters["scored"] == 1 and counters["letters"] == 1
     assert run["llm_calls"] == 5
     assert conn.execute("SELECT COUNT(*) FROM letters").fetchone()[0] == 1

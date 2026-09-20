@@ -48,6 +48,8 @@ def test_score_pending_writes_scores_and_statuses(conn, fake_llm):
     assert c == {"scored": 1, "skipped": 2, "failed": 0}
     st = {r["id"]: r["status"] for r in conn.execute("SELECT id,status FROM jobs")}
     assert st[ids[0]] == "scored" and st[ids[1]] == "skipped" and st[ids[2]] == "skipped"
+    rh_reason = conn.execute("SELECT failure_reason FROM jobs WHERE id=?", (ids[2],)).fetchone()[0]
+    assert "règle" in rh_reason and "RH" in rh_reason
     sc = conn.execute("SELECT score, reasons FROM scores WHERE job_id=?", (ids[0],)).fetchone()
     assert sc["score"] == 85 and json.loads(sc["reasons"]) == ["ML", "Python"]
     assert "stage data science" in fake_llm.prompts[0][0]  # l'intent pilote le prompt

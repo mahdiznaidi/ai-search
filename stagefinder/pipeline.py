@@ -21,12 +21,14 @@ log = logging.getLogger(__name__)
 
 
 def discover(conn: sqlite3.Connection, campaign: Campaign, sources: list[Source],
-             limit: int = 20, workers: int = 4) -> dict:
+             limit: int = 20, workers: int = 2) -> dict:
     keywords = campaign_terms(conn, campaign.id, "keyword")
+    if not keywords:
+        raise ValueError("campagne sans mot-clé actif")
     locations = campaign_terms(conn, campaign.id, "location") or [campaign.country]
     active = [s for s in sources if s.supports(campaign.country)]
     tasks = [(s, k, l) for s in active for k in keywords for l in locations]
-    counters = {"found": 0, "new": 0, "duplicates": 0}
+    counters = {"found": 0, "new": 0, "inserted": 0, "duplicates": 0}
 
     def search(t):
         s, k, l = t
@@ -42,9 +44,11 @@ def discover(conn: sqlite3.Connection, campaign: Campaign, sources: list[Source]
             counters["found"] += 1
             res = upsert_job(conn, raw, campaign.id, k, l)
             if res.created:
-                counters["new"] += 1
-            if res.created and res.duplicate_of:
-                counters["duplicates"] += 1
+                counters["inserted"] += 1
+                if res.duplicate_of:
+                    counters["duplicates"] += 1
+                else:
+                    counters["new"] += 1
     return counters
 
 

@@ -5,7 +5,7 @@ import sqlite3
 
 from stagefinder.db import now
 from stagefinder.llm import BudgetExceeded, LLMError, LLMFatal
-from stagefinder.models import Campaign, Fact, campaign_terms
+from stagefinder.models import Campaign, Fact, campaign_terms, load_enriched
 from stagefinder.profile import format_facts
 
 SYSTEM = """Tu es un recruteur. Le candidat cherche : {intent}
@@ -24,6 +24,14 @@ def rule_prefilter(text: str, must_have: list[str], exclude: list[str]) -> bool:
     if any(x.lower() in t for x in exclude):
         return False
     return not must_have or any(m.lower() in t for m in must_have)
+
+
+def _rule_reject_reason(text: str, must_have: list[str], exclude: list[str]) -> str:
+    t = (text or "").lower()
+    for x in exclude:
+        if x.lower() in t:
+            return f"règle: {x}"
+    return "règle: aucun must_have"
 
 
 def _set(conn, job_id, status, reason=None):
@@ -52,10 +60,11 @@ def score_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: list
 
     to_llm = []
     for r in rows:
-        if rule_prefilter(_job_text(r), must_have, exclude):
+        text = _job_text(r)
+        if rule_prefilter(text, must_have, exclude):
             to_llm.append(r)
         else:
-            _set(conn, r["id"], "skipped")
+            _set(conn, r["id"], "skipped", _rule_reject_reason(text, must_have, exclude))
             counters["skipped"] += 1
     conn.commit()
 
@@ -64,11 +73,11 @@ def score_pending(conn: sqlite3.Connection, llm, campaign: Campaign, facts: list
         batch = to_llm[i:i + batch_size]
         user = ""
         for k, r in enumerate(batch):
-            e = json.loads(r["enriched"] or "{}")
+            e = load_enriched(r)
             user += (f"[{k}] {r['title']} — {r['company']} ({r['location']})\n"
-                     f"Missions: {e.get('missions', '')[:600]}\n"
-                     f"Exigences: {'; '.join(e.get('requirements', [])[:8])}\n"
-                     f"Stack: {', '.join(e.get('tech_stack', [])[:12])}\n\n")
+                     f"Missions: {e['missions'][:600]}\n"
+                     f"Exigences: {'; '.join(e['requirements'][:8])}\n"
+                     f"Stack: {', '.join(e['tech_stack'][:12])}\n\n")
         try:
             answer = llm.chat_json(system, user, max_tokens=600)
         except (BudgetExceeded, LLMFatal):

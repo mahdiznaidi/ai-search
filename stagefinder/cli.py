@@ -149,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("job_id", type=int)
     rg.add_argument("--campaign", type=int, required=True)
     rg.add_argument("--instruction", default="")
-    rg.add_argument("--language", default=None, choices=["fr", "en"])
+    rg.add_argument("--language", default=None, choices=["fr", "en", "de", "es", "it"])
     rg.set_defaults(fn=cmd_letters_regenerate)
 
     j = sub.add_parser("jobs").add_subparsers(dest="sub", required=True)

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from stagefinder import cli, db
 
 
@@ -69,6 +71,14 @@ def test_jobs_retry_failed_enrich(tmp_path, capsys, monkeypatch):
     conn = db.connect(dbp)
     row = conn.execute("SELECT status, failure_reason FROM jobs WHERE id=?", (r.job_id,)).fetchone()
     assert row["status"] == "discovered" and row["failure_reason"] is None
+
+
+def test_letters_regenerate_accepts_extended_language_choices(tmp_path, monkeypatch):
+    parser = cli.build_parser()
+    a = parser.parse_args(["letters", "regenerate", "1", "--campaign", "1", "--language", "de"])
+    assert a.language == "de"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["letters", "regenerate", "1", "--campaign", "1", "--language", "xx"])
 
 
 def test_letters_regenerate_without_cv_fails_explicitly(tmp_path, capsys, monkeypatch):

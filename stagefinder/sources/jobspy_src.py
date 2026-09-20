@@ -76,9 +76,9 @@ class JobSpySource:
                   linkedin_fetch_description=True, verbose=0)
         try:
             df = self._scrape(**kw)
-        except Exception as e:  # le scraper tiers lève des exceptions variées
+            if df is None or df.empty:
+                return []
+            return rows_to_rawjobs(df)
+        except Exception as e:  # le scraper tiers lève des exceptions variées ; une ligne malformée aussi
             log.warning("jobspy %r @ %r: %s", keyword, location, e, exc_info=True)
             return []
-        if df is None or df.empty:
-            return []
-        return rows_to_rawjobs(df)

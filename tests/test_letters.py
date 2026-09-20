@@ -121,6 +121,19 @@ def test_auto_language_follows_job(conn, fake_llm, tmp_path):
     assert conn.execute("SELECT language FROM letters WHERE id=?", (lid,)).fetchone()[0] == "fr"
 
 
+def test_auto_language_fallback_is_reported_as_warning(conn, fake_llm, tmp_path):
+    camp, jid = _seed(conn, language="auto")
+    conn.execute("UPDATE jobs SET language=NULL WHERE id=?", (jid,)); conn.commit()
+    en = ("Dear Hiring Manager,\n\nYour Stage Data Scientist offer at Criteo focuses on data "
+          "governance. " + "Cleaning 10 000 scientific articles with LangChain and FAISS exposed "
+          "me to the same data quality issues. " * 15 + "Best regards")
+    fake_llm.responses = [json.dumps({**ANGLE, "language": "en"}), en]
+    lid = L.generate_for_job(conn, fake_llm, jid, camp, FACTS, tmp_path)
+    row = conn.execute("SELECT language, warnings FROM letters WHERE id=?", (lid,)).fetchone()
+    assert row["language"] == "en"
+    assert any("anglais utilisé par défaut" in w for w in json.loads(row["warnings"]))
+
+
 def test_generate_pending_counts_and_llm_failure(conn, fake_llm, tmp_path):
     from stagefinder.llm import LLMError
     camp, jid = _seed(conn)
@@ -130,6 +143,14 @@ def test_generate_pending_counts_and_llm_failure(conn, fake_llm, tmp_path):
     fake_llm.responses = [boom]
     assert L.generate_pending(conn, fake_llm, camp, FACTS, tmp_path) == {"letters": 0, "failed": 1}
     assert _job(conn, jid)["status"] == "failed_letter"
+
+
+def test_write_letter_strips_llm_chrome(conn, fake_llm, tmp_path):
+    _, jid = _seed(conn)
+    fake_llm.responses = ["Voici la lettre :\n\n```\nMadame, Monsieur,\n\n**Corps**\n```"]
+    body = L.write_letter(fake_llm, _job(conn, jid), ANGLE, FACTS[:1], "fr")
+    assert body.startswith("Madame, Monsieur,")
+    assert "**" not in body and "```" not in body
 
 
 def test_render_docx(tmp_path):
@@ -169,6 +190,24 @@ def test_validate_does_not_flag_cpp_when_cited(conn):
     assert not any("C++" in i for i in issues)
 
 
+def test_validate_flags_tech_leaked_from_non_cited_facts(conn):
+    _, jid = _seed(conn)
+    body = GOOD + " Nous avons aussi utilisé Kubernetes en production."
+    all_facts = FACTS  # FACTS[1] has no tech overlap ("Python", "SQL"); use one with Kubernetes
+    k8s_fact = Fact(3, "skill", "DevOps", "", ["Kubernetes"], "", "")
+    all_facts = FACTS + [k8s_fact]
+    issues = L.validate_letter(body, _job(conn, jid), FACTS[:1], ["Python", "Talend"], "fr",
+                               all_facts)
+    assert any("Kubernetes" in i for i in issues)
+
+
+def test_validate_does_not_flag_tech_when_no_all_facts_given(conn):
+    _, jid = _seed(conn)
+    body = GOOD + " Nous avons aussi utilisé Kubernetes en production."
+    issues = L.validate_letter(body, _job(conn, jid), FACTS[:1], ["Python", "Talend"], "fr")
+    assert not any("Kubernetes" in i for i in issues)
+
+
 def test_validate_flags_missing_company_name(conn):
     _, jid = _seed(conn)
     conn.execute("UPDATE jobs SET company='' WHERE id=?", (jid,))
@@ -183,6 +222,9 @@ def test_generate_continues_when_pairs_items_are_not_dicts(conn, fake_llm, tmp_p
     fake_llm.responses = [json.dumps(bad_angle), GOOD]
     counters = L.generate_pending(conn, fake_llm, camp, FACTS, tmp_path)
     assert counters == {"letters": 1, "failed": 0}
+    row = conn.execute("SELECT warnings FROM letters WHERE job_id=? AND campaign_id=?",
+                       (jid, camp.id)).fetchone()
+    assert any("3 premiers faits utilisés" in w for w in json.loads(row["warnings"]))
 
 
 def test_generate_fails_when_pairs_is_not_a_list(conn, fake_llm, tmp_path):
