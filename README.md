@@ -13,6 +13,7 @@ lettres de motivation ancrées sur les faits du CV. Tout en local (SQLite).
     python -m stagefinder.cli campaign term <id> --kind location "Paris"
     python -m stagefinder.cli run --campaign <id>
     python -m stagefinder.cli letters regenerate <job_id> --campaign <id> --instruction "plus court" --language en
+    python -m stagefinder.cli jobs retry-failed --stage enrich|score|letter [--campaign <id>]
 
 ## Première utilisation
 
@@ -35,6 +36,19 @@ lettres de motivation ancrées sur les faits du CV. Tout en local (SQLite).
    python -m stagefinder.cli run --campaign 1 --limit 10
    ```
    Vous devriez voir `new: 0` et `letters: 0`, avec une exécution nettement plus rapide (aucun appel LLM hors profil en cache).
+
+## Limites connues (v2 core)
+
+- **Une campagne par offre** : le statut d'une offre (`jobs.status`) est global, pas par campagne.
+  Une offre déjà scorée/traitée pour la campagne A n'est pas re-scorée si elle est aussi rattachée
+  à la campagne B — seul `scores` (et `letters`) sont réellement par campagne.
+- Le validateur de lettres ne peut détecter une technologie absente à la fois de l'offre et des
+  faits du CV : il ne compare que ce qu'il connaît (offre + faits), pas un référentiel externe.
+- Les sélecteurs JobTeaser sont repris tels quels du scraper existant et peuvent devenir obsolètes
+  si JobTeaser change son HTML.
+- Lancez la CLI depuis le dossier du projet, ou gardez `.env` à la racine du projet : les chemins
+  relatifs (`DB_PATH`, `LETTERS_DIR`, `CV_PATH`) sont résolus par rapport à l'emplacement du
+  fichier `.env` trouvé, pas par rapport au répertoire courant.
 
 ## Tests
     python -m pytest -q

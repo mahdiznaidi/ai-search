@@ -6,10 +6,12 @@ import logging
 import os
 import sys
 
-from dotenv import dotenv_values
+from dotenv import dotenv_values, find_dotenv
 
 from stagefinder import db, letters, pipeline
 from stagefinder.config import load_settings
+
+log = logging.getLogger(__name__)
 from stagefinder.llm import LLMClient
 from stagefinder.models import add_terms, create_campaign, load_campaign
 from stagefinder.profile import load_or_extract_facts
@@ -18,11 +20,11 @@ from stagefinder.sources.jobteaser import JobTeaserSource
 
 
 def _env() -> dict:
-    return {**dotenv_values(".env"), **os.environ}
+    return {**dotenv_values(find_dotenv(usecwd=True)), **os.environ}
 
 
 def _open():
-    settings = load_settings(_env())
+    settings = load_settings(_env(), env_file=find_dotenv(usecwd=True))
     conn = db.connect(settings.db_path)
     db.migrate(conn)
     return settings, conn
@@ -59,6 +61,7 @@ def cmd_campaign_list(a) -> int:
 
 def cmd_run(a) -> int:
     settings, conn = _open()
+    log.info("base de données : %s", settings.db_path)
     sources = [JobSpySource()]
     if not a.no_jobteaser:
         sources.append(JobTeaserSource())

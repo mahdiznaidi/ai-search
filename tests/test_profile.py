@@ -13,6 +13,42 @@ def conn(tmp_db):
     return c
 
 
+def _build_minimal_pdf(text: bytes) -> bytes:
+    """Hand-builds a minimal single-page PDF with a text content stream, for a real
+    (non-mocked) pypdf extraction test — no external tool, no network."""
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
+        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n",
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    ]
+    content = b"BT /F1 12 Tf 72 720 Td (%s) Tj ET" % text
+    objects.append(b"5 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n"
+                   % (len(content), content))
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for obj in objects:
+        offsets.append(len(out))
+        out += obj
+    xref_offset = len(out)
+    n = len(objects) + 1
+    xref = bytearray(b"xref\n0 %d\n" % n)
+    xref += b"0000000000 65535 f \n"
+    for off in offsets:
+        xref += ("%010d 00000 n \n" % off).encode()
+    out += xref
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF" % (n, xref_offset)
+    return bytes(out)
+
+
+def test_extract_pdf_text_reads_real_pdf(tmp_path):
+    pdf_path = tmp_path / "real.pdf"
+    pdf_path.write_bytes(_build_minimal_pdf(b"Hello CV"))
+    assert "Hello CV" in P.extract_pdf_text(pdf_path)
+
+
 FACTS_JSON = json.dumps({"facts": [
     {"kind": "project", "label": "Agent de veille scientifique",
      "detail": "Pipeline de collecte et synthèse d'articles", "tech": ["LangChain", "FAISS"],

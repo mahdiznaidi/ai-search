@@ -26,6 +26,11 @@
 
 - `jobs` gagne `company_norm TEXT` (indexée) pour la couche 3 de dédup (comparaison floue restreinte à la même entreprise) et `enriched TEXT` (JSON produit par l'enrichissement : missions, stack, contexte).
 - Le gabarit `.docx` issu de `cover letter.docx` est reporté au plan 2 ; ici `render_docx` produit un document simple.
+- `Source.search(...)` prend un paramètre `is_remote` supplémentaire (non prévu dans l'interface `Source` initiale du spec) pour transmettre le filtre remote de la campagne aux sources.
+- La couche 3 de dédup utilise `fuzz.token_sort_ratio` plutôt que `fuzz.token_set_ratio` : `token_set_ratio` dégénère à 100 dès qu'un titre est un sur-ensemble de l'autre (ex. « Stage Data Analyst » vs « Stage Data Analyst Marketing »), ce qui fusionnait silencieusement des offres distinctes.
+- L'enrichissement est « description-first » : si la description courte issue de la recherche fait ≥ 500 caractères, ou si la page complète échoue/est trop courte, on l'utilise directement plutôt que de retenter ou d'échouer ; la provenance du texte (`page` ou `search_description`) est stockée dans `enriched["text_source"]`.
+- `llm.py` distingue `LLMFatal` (clé API invalide/révoquée, crédit épuisé, requête rejetée — HTTP 400/401/402/403) de `LLMError` (retentable ou erreur de contenu) : une erreur fatale fait échouer le run entier plutôt qu'une seule offre.
+- Les compteurs de `discover()` distinguent `new` (offres canoniques réellement nouvelles) d'`inserted` (toutes les lignes créées, y compris les doublons détectés) — utile pour ne pas surestimer le volume net d'offres neuves.
 
 ## Carte des fichiers
 
