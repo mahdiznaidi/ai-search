@@ -154,7 +154,44 @@ def _page_run() -> None:
             st.text(f"[{r['id']}] {r['status']} — {r['stage'] or '—'} — {r['started_at']}")
 
 
-PAGES = {"Campagnes": _page_campaigns, "Run": _page_run}
+def _page_jobs() -> None:
+    st.header("Offres")
+    conn = _conn()
+    campaigns = D.list_campaigns(conn)
+    if not campaigns:
+        st.info("Aucune campagne. Créez-en une dans l'écran Campagnes.")
+        return
+
+    options = {c["id"]: c["name"] for c in campaigns}
+    cid = st.selectbox("Campagne", list(options.keys()), format_func=lambda i: options[i],
+                       key="jobs_campaign_select")
+    status_filter = st.selectbox(
+        "Statut", ["(tous)", "discovered", "enriched", "scored", "skipped", "letter_ready",
+                  "duplicate", "failed_enrich", "failed_score", "failed_letter"],
+        key="jobs_status_filter")
+    status = None if status_filter == "(tous)" else status_filter
+
+    jobs = D.list_jobs(conn, campaign_id=cid, status=status)
+    if not jobs:
+        st.info("Aucune offre pour ces filtres.")
+        return
+
+    for j in jobs:
+        cols = st.columns([3, 2, 1, 1, 2])
+        cols[0].markdown(f"**{j['title']}** — {j['company']} ({j['location']})")
+        cols[1].text(f"statut : {j['status']}")
+        cols[2].text(f"score : {j['score'] if j['score'] is not None else '—'}")
+        cols[3].markdown(f"[lien]({j['url']})" if j["url"] else "")
+        other_ids = [o["id"] for o in jobs if o["id"] != j["id"]]
+        if other_ids:
+            target = cols[4].selectbox("doublon de", other_ids, key=f"dup_target_{j['id']}",
+                                       label_visibility="collapsed")
+            if cols[4].button("Marquer doublon", key=f"mark_dup_{j['id']}"):
+                D.mark_duplicate(conn, j["id"], target)
+                st.rerun()
+
+
+PAGES = {"Campagnes": _page_campaigns, "Run": _page_run, "Offres": _page_jobs}
 
 
 def main() -> None:

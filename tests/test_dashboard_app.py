@@ -106,3 +106,32 @@ def test_run_page_with_no_runs_shows_message(env):
     at.sidebar.radio[0].set_value("Run").run()
     assert not at.exception
     assert any("aucun run" in i.value.lower() for i in at.info)
+
+
+def test_jobs_page_lists_and_marks_duplicate(env):
+    from stagefinder import db
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    a = upsert_job(conn, RawJob("indeed", "a", "Stage A", "Co", "Paris", "https://x/a", "d"),
+                   cid, "k", "l").job_id
+    b = upsert_job(conn, RawJob("indeed", "b", "Stage B", "Co", "Paris", "https://x/b", "d"),
+                   cid, "k", "l").job_id
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Offres").run()
+    at.selectbox(key="jobs_campaign_select").set_value(cid).run()
+    assert not at.exception
+    assert any("Stage A" in m.value for m in at.markdown) or \
+           any("Stage A" in str(df.value) for df in at.dataframe)
+
+    at.selectbox(key=f"dup_target_{b}").set_value(a).run()
+    at.button(key=f"mark_dup_{b}").click().run()
+    assert not at.exception
+    conn2 = db.connect(env["db_path"])
+    row = conn2.execute("SELECT status, duplicate_of FROM jobs WHERE id=?", (b,)).fetchone()
+    assert row["status"] == "duplicate" and row["duplicate_of"] == a
