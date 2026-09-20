@@ -32,6 +32,10 @@ def test_normalize_title_keeps_distinguishing_words():
     assert normalize_title("Stage Data Scientist") != normalize_title("CDI Data Scientist")
 
 
+def test_normalize_title_gender_regex_does_not_overmatch():
+    assert normalize_title("Stage Trading F/X") != normalize_title("Stage Trading")
+
+
 @pytest.mark.parametrize("a,b", [
     ("Criteo SA", "Criteo"), ("BUTAGAZ SAS", "Butagaz"),
     ("Siemens GmbH", "siemens"), ("Doctolib via Indeed", "Doctolib"),
@@ -43,6 +47,11 @@ def test_normalize_company(a, b):
 def test_fingerprint_is_stable_and_ignores_location():
     assert fingerprint("Criteo SA", "Stage Data Scientist H/F") == \
         fingerprint("Criteo", "Data Scientist Intern (M/F)")
+
+
+def test_normalize_company_keeps_leading_short_legal_like_tokens():
+    assert normalize_company("NV Energy") == "nv energy"
+    assert normalize_company("Renault Group France") == "renault"
 
 
 @pytest.mark.parametrize("source,url,fb,expected", [
@@ -88,6 +97,17 @@ def test_layer3_fuzzy_same_company_city_suffix(conn, cid):
                         title="Stage Data Scientist H/F - Paris",
                         url="https://www.linkedin.com/jobs/view/77"), cid, "kw", "Paris")
     assert b.duplicate_of == a.job_id
+
+
+def test_layer1_resighting_duplicate_increments_canonical_seen_count(conn, cid):
+    a = upsert_job(conn, _raw(), cid, "kw", "Paris")
+    dup_raw = _raw(source="linkedin", ext="99", title="Data Scientist Intern (M/F)",
+                    company="Criteo", url="https://www.linkedin.com/jobs/view/99",
+                    loc="Paris, Île-de-France, France")
+    upsert_job(conn, dup_raw, cid, "kw", "Paris")
+    upsert_job(conn, dup_raw, cid, "kw", "Paris")
+    seen = conn.execute("SELECT seen_count FROM jobs WHERE id=?", (a.job_id,)).fetchone()["seen_count"]
+    assert seen == 3
 
 
 def test_distinct_roles_same_company_not_merged(conn, cid):

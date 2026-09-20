@@ -13,7 +13,13 @@ from stagefinder.models import RawJob
 FUZZY_THRESHOLD = 90
 
 # Bruit RH par langue : (h/f), F/H, (m/w/d), M/F/D, (H/M)…
-_GENDER = re.compile(r"\(?\b[hfmwdx]\s*/\s*[hfmwdx](?:\s*/\s*[hfmwdx])?\b\)?", re.I)
+# Parenthesized forms are safe to strip broadly ("(h/f)", "(m/w/d)"); unparenthesized
+# forms are restricted to the classic gender pairs so legitimate text like "Trading F/X"
+# is not mistaken for gender noise.
+_GENDER_PAREN = re.compile(r"\(\s*[hfmwdx]\s*(?:/\s*[hfmwdx]\s*){1,2}\)", re.I)
+_GENDER_PAIR = re.compile(
+    r"\b(?:h\s*/\s*f|f\s*/\s*h|m\s*/\s*f|f\s*/\s*m|m\s*/\s*w|w\s*/\s*m)"
+    r"(?:\s*/\s*[dx])?\b", re.I)
 _DURATION = re.compile(r"\b\d+\s*(?:mois|months?|monate|meses)\b", re.I)
 _YEAR = re.compile(r"\b20\d\d\b")
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
@@ -26,14 +32,20 @@ _SYNONYMS = {
     "werkstudent": "stage", "werkstudentin": "stage", "pasantia": "stage",
     "tirocinio": "stage", "estagio": "stage",
 }
-_LEGAL = re.compile(
-    r"\b(sas|sa|sarl|sasu|eurl|gmbh|ag|ltd|limited|inc|llc|plc|bv|nv|srl|spa|"
-    r"group|groupe|france|via indeed)\b", re.I)
+# "via indeed" is noise anywhere in the string; legal-form suffixes (sas, gmbh, group,
+# france…) are only noise when they are the LAST token(s) — stripping them anywhere
+# would mangle real names that start with, or contain, those same short words (e.g.
+# "NV Energy", "France Télévisions").
+_VIA = re.compile(r"\bvia indeed\b", re.I)
+_LEGAL_SUFFIX = re.compile(
+    r"\s+(?:sas|sa|sarl|sasu|eurl|gmbh|ag|ltd|limited|inc|llc|plc|bv|nv|srl|spa|"
+    r"group|groupe|france)\s*$", re.I)
 
 
 def normalize_title(t: str) -> str:
     t = (t or "").lower()
-    t = _GENDER.sub(" ", t)
+    t = _GENDER_PAREN.sub(" ", t)
+    t = _GENDER_PAIR.sub(" ", t)
     t = _DURATION.sub(" ", t)
     t = _YEAR.sub(" ", t)
     t = _PUNCT.sub(" ", t)
@@ -43,7 +55,12 @@ def normalize_title(t: str) -> str:
 
 def normalize_company(c: str) -> str:
     c = (c or "").lower()
-    c = _LEGAL.sub(" ", c)
+    c = _VIA.sub(" ", c)
+    while True:
+        stripped = _LEGAL_SUFFIX.sub("", c)
+        if stripped == c:
+            break
+        c = stripped
     c = _PUNCT.sub(" ", c)
     return _WS.sub(" ", c).strip()
 
@@ -114,6 +131,8 @@ def upsert_job(conn: sqlite3.Connection, raw: RawJob, campaign_id: int,
                      (ts, existing["id"]))
         _link(conn, existing["id"], campaign_id, matched_keyword, matched_location)
         if existing["duplicate_of"]:
+            conn.execute("UPDATE jobs SET last_seen_at=?, seen_count=seen_count+1 WHERE id=?",
+                         (ts, existing["duplicate_of"]))
             _link(conn, existing["duplicate_of"], campaign_id, matched_keyword, matched_location)
         conn.commit()
         return UpsertResult(existing["id"], False, existing["duplicate_of"])
