@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from stagefinder import db
+from stagefinder import db, letters
 from stagefinder.config import load_settings
 from stagefinder.dashboard import data as D
 from stagefinder.keywords import suggest_terms
@@ -191,7 +191,56 @@ def _page_jobs() -> None:
                 st.rerun()
 
 
-PAGES = {"Campagnes": _page_campaigns, "Run": _page_run, "Offres": _page_jobs}
+def _page_letters() -> None:
+    st.header("Lettres")
+    conn = _conn()
+    campaigns = D.list_campaigns(conn)
+    if not campaigns:
+        st.info("Aucune campagne. Créez-en une dans l'écran Campagnes.")
+        return
+
+    options = {c["id"]: c["name"] for c in campaigns}
+    cid = st.selectbox("Campagne", list(options.keys()), format_func=lambda i: options[i],
+                       key="letters_campaign_select")
+
+    letters_rows = D.list_letters(conn, campaign_id=cid)
+    if not letters_rows:
+        st.info("Aucune lettre pour cette campagne.")
+        return
+
+    for row in letters_rows:
+        with st.expander(f"[v{row['version']}] {row['company']} — {row['title']}"):
+            body = conn.execute("SELECT body FROM letters WHERE id=?", (row["id"],)).fetchone()[0]
+            st.text_area("Contenu", value=body, height=250, key=f"body_{row['id']}",
+                        label_visibility="collapsed")
+            for w in row["warnings"]:
+                st.warning(w)
+            path = Path(row["file_path"])
+            if path.exists():
+                st.download_button("Télécharger le .docx", data=path.read_bytes(),
+                                   file_name=path.name, key=f"dl_{row['id']}")
+
+            instruction = st.text_input("Consigne de régénération (optionnel)",
+                                        key=f"instr_{row['job_id']}")
+            language = st.selectbox("Langue", ["(garder)", "fr", "en", "de", "es", "it"],
+                                    key=f"lang_{row['job_id']}")
+            if st.button("Régénérer", key=f"regen_{row['job_id']}"):
+                llm = _llm()
+                campaign = load_campaign(conn, cid)
+                facts = _facts_for_dashboard(conn, llm)
+                try:
+                    letters.generate_for_job(
+                        conn, llm, row["job_id"], campaign, facts, _settings().letters_dir,
+                        instruction=instruction,
+                        language=None if language == "(garder)" else language)
+                    st.success("Nouvelle version générée.")
+                    st.rerun()
+                except LLMError as e:
+                    st.error(f"Échec de la régénération : {e}")
+
+
+PAGES = {"Campagnes": _page_campaigns, "Run": _page_run, "Offres": _page_jobs,
+         "Lettres": _page_letters}
 
 
 def main() -> None:

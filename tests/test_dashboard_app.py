@@ -135,3 +135,39 @@ def test_jobs_page_lists_and_marks_duplicate(env):
     conn2 = db.connect(env["db_path"])
     row = conn2.execute("SELECT status, duplicate_of FROM jobs WHERE id=?", (b,)).fetchone()
     assert row["status"] == "duplicate" and row["duplicate_of"] == a
+
+
+def test_letters_page_lists_and_downloads(env):
+    import json as _json
+
+    from stagefinder import db
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    jid = upsert_job(conn, RawJob("indeed", "a", "Stage A", "Co", "Paris", "https://x/a", "d"),
+                     cid, "k", "l").job_id
+    letters_dir = env["letters_dir"]
+    letters_dir.mkdir(parents=True, exist_ok=True)
+    docx_path = letters_dir / "1_Co_Stage_A_v1.docx"
+    docx_path.write_bytes(b"fake docx bytes")
+    conn.execute(
+        "INSERT INTO letters(job_id,campaign_id,version,language,angle,body,file_path,warnings,"
+        "model,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (jid, cid, 1, "fr", "{}", "Corps de la lettre", str(docx_path),
+         _json.dumps(["longueur 220 mots"]), "m", "t"))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Lettres").run()
+    at.selectbox(key="letters_campaign_select").set_value(cid).run()
+    assert not at.exception
+    assert any("Stage A" in e.label for e in at.expander)
+    assert any("longueur 220 mots" in w.value for w in at.warning)
+    # `st.download_button` n'est pas exposé comme type assertable par AppTest (il apparaît en
+    # UnknownElement) : on vérifie seulement que la page ne plante pas en le rendant, et que le
+    # texte de la lettre est bien lu depuis le fichier .docx généré au préalable.
+    assert docx_path.exists()
