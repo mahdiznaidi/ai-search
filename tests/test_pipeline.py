@@ -167,3 +167,25 @@ def test_resume_reuses_run_row(conn, settings, fake_llm):
     rid2 = PL.run_campaign(conn, settings, cid, [FakeSource([])], fake_llm, run_id=rid)
     assert rid == rid2
     assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+
+
+def test_run_campaign_refuses_when_already_running(conn, settings, fake_llm):
+    cid = _campaign(conn)
+    conn.execute("INSERT INTO runs(campaign_id,status,started_at) VALUES (?,?,?)",
+                (cid, "running", "t"))
+    conn.commit()
+    run_id = PL.run_campaign(conn, settings, cid, [FakeSource([])], fake_llm)
+    row = conn.execute("SELECT status, error FROM runs WHERE id=?", (run_id,)).fetchone()
+    assert row["status"] == "failed" and "déjà en cours" in row["error"]
+    assert fake_llm.calls == 0
+
+
+def test_resume_of_running_run_is_not_blocked_by_itself(conn, settings, fake_llm):
+    cid = _campaign(conn)
+    cur = conn.execute("INSERT INTO runs(campaign_id,status,started_at) VALUES (?,?,?)",
+                       (cid, "running", "t"))
+    conn.commit()
+    fake_llm.responses = [FACTS_JSON]
+    rid = PL.run_campaign(conn, settings, cid, [FakeSource([])], fake_llm, run_id=cur.lastrowid)
+    row = conn.execute("SELECT status FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["status"] == "done"

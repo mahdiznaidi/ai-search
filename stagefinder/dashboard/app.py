@@ -112,7 +112,12 @@ def _page_campaigns() -> None:
 
             limit = st.number_input("Limite d'offres par recherche", min_value=1, max_value=50,
                                     value=10, key=f"limit_{c['id']}")
-            if st.button("Lancer", key=f"run_{c['id']}"):
+            latest = D.latest_run(conn, c["id"])
+            run_in_progress = latest is not None and latest["status"] == "running"
+            if run_in_progress:
+                st.warning(f"Un run est déjà en cours pour cette campagne (run {latest['id']}). "
+                          "Attendez sa fin avant d'en relancer un — voir l'écran « Run ».")
+            if st.button("Lancer", key=f"run_{c['id']}", disabled=run_in_progress):
                 subprocess.Popen(
                     [sys.executable, "-m", "stagefinder.cli", "run",
                      "--campaign", str(c["id"]), "--limit", str(int(limit))],

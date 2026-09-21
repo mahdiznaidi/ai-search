@@ -62,9 +62,18 @@ def run_campaign(conn: sqlite3.Connection, settings: Settings, campaign_id: int,
                  sources: list[Source], llm, fetch=enrich.fetch_page,
                  run_id: int | None = None, limit: int = 20) -> int:
     if run_id is None:
+        already_running = conn.execute(
+            "SELECT id FROM runs WHERE campaign_id=? AND status='running' LIMIT 1",
+            (campaign_id,)).fetchone()
         cur = conn.execute("INSERT INTO runs(campaign_id,status,started_at) VALUES (?,?,?)",
                            (campaign_id, "running", now()))
         run_id = cur.lastrowid
+        conn.commit()
+        if already_running:
+            _update_run(conn, run_id, status="failed", stage="init",
+                        error=f"un run est déjà en cours pour cette campagne (run {already_running['id']})",
+                        finished_at=now())
+            return run_id
     else:
         _update_run(conn, run_id, status="running", error=None)
     conn.commit()

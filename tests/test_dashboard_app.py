@@ -200,3 +200,22 @@ def test_tracking_page_records_application(env):
     assert row["outcome"] == "interview" and "25/09" in row["notes"]
 
     assert any("interview" in m.value for m in at.markdown)
+
+
+def test_launch_button_disabled_when_run_already_in_progress(env):
+    from stagefinder import db
+    from stagefinder.models import create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    conn.execute("INSERT INTO runs(campaign_id,status,started_at) VALUES (?,?,?)",
+                (cid, "running", db.now()))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    assert not at.exception
+    btn = next(b for b in at.button if b.key == f"run_{cid}")
+    assert btn.disabled
+    assert any("déjà en cours" in w.value for w in at.warning)
