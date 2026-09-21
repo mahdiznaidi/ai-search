@@ -12,7 +12,7 @@ from stagefinder.dashboard import data as D
 from stagefinder.keywords import suggest_terms
 from stagefinder.llm import LLMClient, LLMError
 from stagefinder.models import add_terms, create_campaign, load_campaign
-from stagefinder.profile import load_or_extract_facts
+from stagefinder.profile import cv_hash, forget_facts, load_or_extract_facts
 
 st.set_page_config(page_title="StageFinder", layout="wide")
 
@@ -112,6 +112,13 @@ def _page_campaigns() -> None:
 
             limit = st.number_input("Limite d'offres par recherche", min_value=1, max_value=50,
                                     value=10, key=f"limit_{c['id']}")
+
+            n_keywords = sum(1 for t in terms if t["kind"] == "keyword" and t["enabled"])
+            n_locations = sum(1 for t in terms if t["kind"] == "location" and t["enabled"]) or 1
+            st.caption(f"≈ {n_keywords * n_locations} combinaisons mot-clé × ville à explorer — "
+                      "comptez de quelques minutes à plusieurs dizaines de minutes selon le "
+                      "nombre d'offres trouvées.")
+
             latest = D.latest_run(conn, c["id"])
             run_in_progress = latest is not None and latest["status"] == "running"
             if run_in_progress:
@@ -124,6 +131,35 @@ def _page_campaigns() -> None:
                     cwd=_project_root())
                 st.info(f"Run lancé en arrière-plan pour la campagne {c['id']}. "
                        "Voir l'écran « Run » pour suivre l'avancement.")
+
+            st.divider()
+            confirm = st.checkbox("Confirmer la suppression de cette campagne",
+                                  key=f"confirm_delete_{c['id']}")
+            if st.button("Supprimer la campagne", key=f"delete_{c['id']}", disabled=not confirm):
+                D.delete_campaign(conn, c["id"])
+                st.success(f"Campagne « {c['name']} » supprimée.")
+                st.rerun()
+
+
+_FRIENDLY_ERRORS = [
+    ("HTTP 401", "clé API invalide ou expirée — vérifiez OPENROUTER_API_KEY dans .env"),
+    ("HTTP 403", "accès refusé par le fournisseur IA — vérifiez votre clé et vos droits"),
+    ("HTTP 402", "crédit épuisé sur votre compte OpenRouter"),
+    ("budget:", "plafond d'appels IA atteint pour ce run (voir MAX_LLM_CALLS_PER_RUN)"),
+    ("CV_PATH", "CV introuvable — vérifiez le chemin CV_PATH dans .env"),
+    ("déjà en cours", "un autre run était déjà en cours pour cette campagne"),
+]
+
+_STAGE_LABELS = {"init": "préparation", "discover": "recherche des offres",
+                 "enrich": "lecture détaillée des offres", "score": "notation des offres",
+                 "generate": "rédaction des lettres"}
+
+
+def _friendly_error(error: str) -> str:
+    for needle, message in _FRIENDLY_ERRORS:
+        if needle in error:
+            return message
+    return error
 
 
 def _page_run() -> None:
@@ -147,16 +183,30 @@ def _page_run() -> None:
         return
 
     latest = runs[0]
+    if latest["status"] == "running":
+        st.markdown('<meta http-equiv="refresh" content="5">', unsafe_allow_html=True)
+        st.caption("🔄 Cette page se rafraîchit automatiquement toutes les 5 secondes.")
+
+    stage_label = _STAGE_LABELS.get(latest["stage"], latest["stage"] or "—")
     st.markdown(f"**Dernier run [{latest['id']}] : {latest['status']}** — étape : "
-               f"{latest['stage'] or '—'} — appels LLM : {latest['llm_calls']}")
+               f"{stage_label} — appels IA : {latest['llm_calls']}")
     if latest["counters"]:
         st.json(latest["counters"])
     if latest["error"]:
-        st.error(latest["error"])
+        st.error(_friendly_error(latest["error"]))
 
     with st.expander("Historique des runs"):
         for r in runs:
             st.text(f"[{r['id']}] {r['status']} — {r['stage'] or '—'} — {r['started_at']}")
+
+
+JOBS_FILTERS = {
+    "Toutes": None,
+    "Prêtes (lettre générée)": ["letter_ready"],
+    "Retenues (score suffisant)": ["scored"],
+    "Écartées": ["skipped"],
+    "En erreur": ["failed_enrich", "failed_score", "failed_letter"],
+}
 
 
 def _page_jobs() -> None:
@@ -170,27 +220,27 @@ def _page_jobs() -> None:
     options = {c["id"]: c["name"] for c in campaigns}
     cid = st.selectbox("Campagne", list(options.keys()), format_func=lambda i: options[i],
                        key="jobs_campaign_select")
-    status_filter = st.selectbox(
-        "Statut", ["(tous)", "discovered", "enriched", "scored", "skipped", "letter_ready",
-                  "duplicate", "failed_enrich", "failed_score", "failed_letter"],
-        key="jobs_status_filter")
-    status = None if status_filter == "(tous)" else status_filter
+    filter_label = st.selectbox("Filtre", list(JOBS_FILTERS.keys()), key="jobs_status_filter")
 
-    jobs = D.list_jobs(conn, campaign_id=cid, status=status)
+    jobs = D.list_jobs(conn, campaign_id=cid, status=JOBS_FILTERS[filter_label])
     if not jobs:
-        st.info("Aucune offre pour ces filtres.")
+        st.info("Aucune offre pour ce filtre.")
         return
 
+    job_titles = {o["id"]: o["title"] for o in jobs}
     for j in jobs:
         cols = st.columns([3, 2, 1, 1, 2])
         cols[0].markdown(f"**{j['title']}** — {j['company']} ({j['location']})")
         cols[1].text(f"statut : {j['status']}")
         cols[2].text(f"score : {j['score'] if j['score'] is not None else '—'}")
         cols[3].markdown(f"[lien]({j['url']})" if j["url"] else "")
+        if j["reasons"]:
+            cols[0].caption(" · ".join(j["reasons"]))
         other_ids = [o["id"] for o in jobs if o["id"] != j["id"]]
         if other_ids:
-            target = cols[4].selectbox("doublon de", other_ids, key=f"dup_target_{j['id']}",
-                                       label_visibility="collapsed")
+            target = cols[4].selectbox(
+                "doublon de", other_ids, key=f"dup_target_{j['id']}",
+                format_func=lambda i: f"{job_titles[i]} (#{i})", label_visibility="collapsed")
             if cols[4].button("Marquer doublon", key=f"mark_dup_{j['id']}"):
                 D.mark_duplicate(conn, j["id"], target)
                 st.rerun()
@@ -214,10 +264,19 @@ def _page_letters() -> None:
         return
 
     for row in letters_rows:
-        with st.expander(f"[v{row['version']}] {row['company']} — {row['title']}"):
+        n_warnings = len(row["warnings"])
+        badge = "🟢" if n_warnings == 0 else ("🟡" if n_warnings <= 2 else "🔴")
+        with st.expander(f"{badge} [v{row['version']}] {row['company']} — {row['title']}"):
             body = conn.execute("SELECT body FROM letters WHERE id=?", (row["id"],)).fetchone()[0]
-            st.text_area("Contenu", value=body, height=250, key=f"body_{row['id']}",
-                        label_visibility="collapsed")
+            edited = st.text_area("Contenu", value=body, height=250, key=f"body_{row['id']}",
+                                  label_visibility="collapsed")
+            if edited != body and st.button("Enregistrer les modifications", key=f"save_{row['id']}"):
+                conn.execute("UPDATE letters SET body=? WHERE id=?", (edited, row["id"]))
+                conn.commit()
+                path = Path(row["file_path"])
+                letters.render_docx(edited, path)
+                st.success("Modifications enregistrées et .docx régénéré.")
+                st.rerun()
             for w in row["warnings"]:
                 st.warning(w)
             path = Path(row["file_path"])
@@ -280,8 +339,44 @@ def _page_tracking() -> None:
             st.caption(a["notes"])
 
 
+def _page_profile() -> None:
+    st.header("Profil (CV)")
+    conn = _conn()
+    settings = _settings()
+    if not settings.cv_path or not settings.cv_path.exists():
+        st.info("Aucun CV configuré — renseignez CV_PATH dans .env.")
+        return
+
+    if st.button("Ré-analyser mon CV", key="reanalyze_cv"):
+        forget_facts(conn, cv_hash(settings.cv_path))
+        try:
+            load_or_extract_facts(conn, _llm(), settings.cv_path)
+            st.success("CV ré-analysé.")
+        except (ValueError, LLMError) as e:
+            st.error(f"Échec de l'analyse : {e}")
+        st.rerun()
+
+    facts = _facts_for_dashboard(conn, _llm())
+    if not facts:
+        st.info("Aucun fait extrait pour l'instant — cliquez sur « Ré-analyser mon CV ».")
+        return
+
+    st.caption(f"{len(facts)} faits utilisés pour juger la pertinence des offres et rédiger "
+              "les lettres. Si l'un d'eux est faux ou mal compris, ré-analysez le CV.")
+    for f in facts:
+        period = f" ({f.period})" if f.period else ""
+        st.markdown(f"**{f.label}**{period} — *{f.kind}*")
+        if f.detail:
+            st.caption(f.detail)
+        if f.tech:
+            st.caption("Outils cités : " + ", ".join(f.tech))
+        if f.metric:
+            st.caption(f"Résultat : {f.metric}")
+        st.divider()
+
+
 PAGES = {"Campagnes": _page_campaigns, "Run": _page_run, "Offres": _page_jobs,
-         "Lettres": _page_letters, "Suivi": _page_tracking}
+         "Lettres": _page_letters, "Suivi": _page_tracking, "Profil": _page_profile}
 
 
 def main() -> None:

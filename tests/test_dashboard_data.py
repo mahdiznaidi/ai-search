@@ -94,3 +94,61 @@ def test_runs_listing_and_latest(conn):
     assert len(D.list_runs(conn, cid)) == 2
     assert D.latest_run(conn, cid)["status"] == "failed"
     assert D.latest_run(conn, 999) is None
+
+
+def test_list_jobs_excludes_duplicates_by_default(conn):
+    cid = create_campaign(conn, "DS", "intent", "FR")
+    a = _job(conn, cid, "a", "Stage A")
+    b = _job(conn, cid, "b", "Stage A bis")
+    D.mark_duplicate(conn, b, a)
+    rows = D.list_jobs(conn, campaign_id=cid)
+    assert [r["id"] for r in rows] == [a]
+
+
+def test_list_jobs_accepts_a_list_of_statuses(conn):
+    cid = create_campaign(conn, "DS", "intent", "FR")
+    a = _job(conn, cid, "a", "Stage A")
+    b = _job(conn, cid, "b", "Stage B")
+    e = _job(conn, cid, "e", "Stage E")
+    conn.execute("UPDATE jobs SET status='scored' WHERE id=?", (a,))
+    conn.execute("UPDATE jobs SET status='skipped' WHERE id=?", (b,))
+    conn.execute("UPDATE jobs SET status='letter_ready' WHERE id=?", (e,))
+    conn.commit()
+    rows = D.list_jobs(conn, campaign_id=cid, status=["scored", "skipped"])
+    assert {r["id"] for r in rows} == {a, b}
+
+
+def test_list_jobs_exposes_score_reasons(conn):
+    cid = create_campaign(conn, "DS", "intent", "FR")
+    a = _job(conn, cid, "a", "Stage A")
+    conn.execute("UPDATE jobs SET status='scored' WHERE id=?", (a,))
+    conn.execute("INSERT INTO scores(job_id,campaign_id,score,reasons,model,scored_at) "
+                "VALUES (?,?,?,?,?,?)", (a, cid, 80, '["Python solide", "LangChain"]', "m", "t"))
+    conn.commit()
+    rows = D.list_jobs(conn, campaign_id=cid)
+    assert rows[0]["reasons"] == ["Python solide", "LangChain"]
+
+
+def test_delete_campaign_removes_campaign_terms_scores_and_letters_but_keeps_jobs(conn):
+    import json as _json
+
+    cid = create_campaign(conn, "DS", "intent", "FR")
+    jid = _job(conn, cid, "a", "Stage A")
+    conn.execute("INSERT INTO campaign_terms(campaign_id,term,kind,origin) VALUES (?,?,?,?)",
+                (cid, "stage data", "keyword", "user"))
+    conn.execute("INSERT INTO scores(job_id,campaign_id,score,reasons,model,scored_at) "
+                "VALUES (?,?,?,?,?,?)", (jid, cid, 80, "[]", "m", "t"))
+    conn.execute(
+        "INSERT INTO letters(job_id,campaign_id,version,language,angle,body,file_path,warnings,"
+        "model,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (jid, cid, 1, "fr", "{}", "corps", "x.docx", "[]", "m", "t"))
+    conn.commit()
+
+    D.delete_campaign(conn, cid)
+
+    assert D.list_campaigns(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM campaign_terms WHERE campaign_id=?", (cid,)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM scores WHERE campaign_id=?", (cid,)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM letters WHERE campaign_id=?", (cid,)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM job_campaigns WHERE campaign_id=?", (cid,)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE id=?", (jid,)).fetchone()[0] == 1

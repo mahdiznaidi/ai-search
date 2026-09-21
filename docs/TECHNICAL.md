@@ -25,9 +25,13 @@ Pour la conception détaillée, voir
 
     streamlit run stagefinder/dashboard/app.py
 
-Cinq écrans : Campagnes (création, suggestion IA des mots-clés, lancement d'un run),
-Run (suivi en direct), Offres (table triée par score, marquage manuel des doublons),
-Lettres (lecture, régénération, export .docx), Suivi (statut des candidatures).
+Six écrans : Campagnes (création, suggestion IA des mots-clés, estimation du volume avant
+de lancer, suppression), Run (suivi en direct avec rafraîchissement automatique toutes les
+5 s tant qu'un run tourne, erreurs traduites en langage clair), Offres (filtre réduit à
+5 catégories utiles — Toutes, Prêtes, Retenues, Écartées, En erreur — raisons du score
+affichées, marquage manuel des doublons), Lettres (lecture, édition avec sauvegarde,
+badge qualité 🟢🟡🔴 selon le nombre d'avertissements, régénération, export .docx),
+Suivi (statut des candidatures), Profil (faits extraits du CV, ré-analyse à la demande).
 Le bouton « Lancer » démarre `stagefinder run` en sous-processus : fermer l'onglet du
 navigateur n'interrompt pas un run en cours. Le bouton est désactivé (avec un
 avertissement) tant qu'un run est déjà en cours pour la campagne.

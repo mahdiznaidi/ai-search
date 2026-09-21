@@ -138,3 +138,19 @@ def test_non_dict_facts_and_bare_list(conn, fake_llm, tmp_path, monkeypatch):
     fake_llm.responses = [bare_list_json]
     facts = P.load_or_extract_facts(conn, fake_llm, cv)
     assert len(facts) == 1 and facts[0].label == "Python"
+
+
+def test_forget_facts_removes_cache_for_hash(conn, fake_llm, tmp_path, monkeypatch):
+    cv = tmp_path / "cv.pdf"
+    cv.write_bytes(b"pdf")
+    monkeypatch.setattr(P, "extract_pdf_text", lambda p: "CV texte")
+    fake_llm.responses = [FACTS_JSON]
+    P.load_or_extract_facts(conn, fake_llm, cv)
+    assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 2
+
+    P.forget_facts(conn, P.cv_hash(cv))
+    assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+
+    fake_llm.responses = [FACTS_JSON]
+    P.load_or_extract_facts(conn, fake_llm, cv)
+    assert fake_llm.calls == 2

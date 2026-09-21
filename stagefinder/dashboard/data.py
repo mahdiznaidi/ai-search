@@ -20,9 +20,12 @@ def list_campaign_terms(conn: sqlite3.Connection, campaign_id: int) -> list[dict
 
 
 def list_jobs(conn: sqlite3.Connection, campaign_id: int | None = None,
-             status: str | None = None) -> list[dict]:
+             status: str | list[str] | None = None) -> list[dict]:
+    """Liste les offres. Par défaut (`status=None`) exclut les doublons — ils n'ont plus
+    rien à décider pour l'utilisateur. Passer une liste de statuts pour un filtre groupé
+    (ex: les trois statuts d'échec réunis sous "En erreur")."""
     sql = ("SELECT j.id, j.title, j.company, j.location, j.status, j.seen_count, "
-          "j.duplicate_of, j.url, s.score "
+          "j.duplicate_of, j.url, s.score, s.reasons "
           "FROM jobs j LEFT JOIN scores s ON s.job_id=j.id "
           "AND s.campaign_id = COALESCE(:cid, s.campaign_id) ")
     where, params = [], {}
@@ -32,13 +35,23 @@ def list_jobs(conn: sqlite3.Connection, campaign_id: int | None = None,
         params["cid"] = campaign_id
     else:
         params["cid"] = None
-    if status is not None:
-        where.append("j.status=:status")
-        params["status"] = status
+
+    statuses = [status] if isinstance(status, str) else status
+    if statuses:
+        placeholders = ", ".join(f":st{i}" for i in range(len(statuses)))
+        where.append(f"j.status IN ({placeholders})")
+        for i, s in enumerate(statuses):
+            params[f"st{i}"] = s
+    elif statuses is None:
+        where.append("j.status != 'duplicate'")
+
     if where:
         sql += "WHERE " + " AND ".join(where) + " "
     sql += "ORDER BY (s.score IS NULL), s.score DESC, j.id"
-    return _rows(conn.execute(sql, params))
+    rows = _rows(conn.execute(sql, params))
+    for r in rows:
+        r["reasons"] = json.loads(r["reasons"] or "[]")
+    return rows
 
 
 def mark_duplicate(conn: sqlite3.Connection, job_id: int, canonical_id: int) -> None:
@@ -91,3 +104,16 @@ def latest_run(conn: sqlite3.Connection, campaign_id: int) -> dict | None:
     r = conn.execute("SELECT * FROM runs WHERE campaign_id=? ORDER BY id DESC LIMIT 1",
                      (campaign_id,)).fetchone()
     return dict(r) if r else None
+
+
+def delete_campaign(conn: sqlite3.Connection, campaign_id: int) -> None:
+    """Supprime une campagne et tout ce qui n'a de sens que pour elle (termes, liens,
+    scores, lettres). Les offres elles-mêmes (`jobs`) sont conservées : elles sont
+    partagées entre campagnes et alimentent la déduplication globale."""
+    conn.execute("DELETE FROM letters WHERE campaign_id=?", (campaign_id,))
+    conn.execute("DELETE FROM scores WHERE campaign_id=?", (campaign_id,))
+    conn.execute("DELETE FROM job_campaigns WHERE campaign_id=?", (campaign_id,))
+    conn.execute("DELETE FROM runs WHERE campaign_id=?", (campaign_id,))
+    conn.execute("DELETE FROM campaign_terms WHERE campaign_id=?", (campaign_id,))
+    conn.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+    conn.commit()

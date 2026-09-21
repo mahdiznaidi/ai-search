@@ -219,3 +219,142 @@ def test_launch_button_disabled_when_run_already_in_progress(env):
     btn = next(b for b in at.button if b.key == f"run_{cid}")
     assert btn.disabled
     assert any("déjà en cours" in w.value for w in at.warning)
+
+
+def test_campaign_shows_estimate_and_can_be_deleted(env):
+    from stagefinder import db
+    from stagefinder.models import add_terms, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    add_terms(conn, cid, "keyword", ["stage data", "stage ml"])
+    add_terms(conn, cid, "location", ["Paris"])
+
+    at = AppTest.from_file(APP)
+    at.run()
+    assert not at.exception
+    assert any("combinaisons" in c.value for c in at.caption)
+
+    at.checkbox(key=f"confirm_delete_{cid}").set_value(True).run()
+    at.button(key=f"delete_{cid}").click().run()
+    assert not at.exception
+    conn2 = db.connect(env["db_path"])
+    assert conn2.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0] == 0
+
+
+def test_run_page_auto_refreshes_while_running_and_translates_error(env):
+    from stagefinder import db
+    from stagefinder.models import create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    conn.execute("INSERT INTO runs(campaign_id,status,stage,started_at) VALUES (?,?,?,?)",
+                (cid, "running", "enrich", db.now()))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Run").run()
+    at.selectbox(key="run_campaign_select").set_value(cid).run()
+    assert not at.exception
+    assert any('http-equiv="refresh"' in m.value for m in at.markdown)
+
+    conn.execute("UPDATE runs SET status='failed', error='llm: HTTP 401 clé invalide' WHERE campaign_id=?",
+                (cid,))
+    conn.commit()
+    at.run()
+    at.sidebar.radio[0].set_value("Run").run()
+    at.selectbox(key="run_campaign_select").set_value(cid).run()
+    assert any("clé API invalide" in e.value for e in at.error)
+
+
+def test_jobs_page_simplified_filters_and_reasons(env):
+    from stagefinder import db
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    a = upsert_job(conn, RawJob("indeed", "a", "Stage A", "Co", "Paris", "https://x/a", "d"),
+                   cid, "k", "l").job_id
+    conn.execute("UPDATE jobs SET status='scored' WHERE id=?", (a,))
+    conn.execute("INSERT INTO scores(job_id,campaign_id,score,reasons,model,scored_at) "
+                "VALUES (?,?,?,?,?,?)", (a, cid, 85, '["Python solide"]', "m", "t"))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Offres").run()
+    at.selectbox(key="jobs_campaign_select").set_value(cid).run()
+    assert not at.exception
+    filter_options = at.selectbox(key="jobs_status_filter").options
+    assert "discovered" not in filter_options and "duplicate" not in filter_options
+    assert "En erreur" in filter_options
+    assert any("Python solide" in c.value for c in at.caption)
+
+
+def test_letters_page_shows_badge_and_saves_edits(env):
+    import json as _json
+
+    from stagefinder import db
+    from stagefinder.dedup import upsert_job
+    from stagefinder.models import RawJob, create_campaign
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cid = create_campaign(conn, "DS", "stage data", "FR")
+    jid = upsert_job(conn, RawJob("indeed", "a", "Stage A", "Co", "Paris", "https://x/a", "d"),
+                     cid, "k", "l").job_id
+    letters_dir = env["letters_dir"]
+    letters_dir.mkdir(parents=True, exist_ok=True)
+    docx_path = letters_dir / "1_Co_Stage_A_v1.docx"
+    docx_path.write_bytes(b"placeholder")
+    conn.execute(
+        "INSERT INTO letters(job_id,campaign_id,version,language,angle,body,file_path,warnings,"
+        "model,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (jid, cid, 1, "fr", "{}", "Corps original", str(docx_path), _json.dumps([]), "m", "t"))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Lettres").run()
+    at.selectbox(key="letters_campaign_select").set_value(cid).run()
+    assert not at.exception
+    assert any(e.label.startswith("🟢") for e in at.expander)
+
+    lid = conn.execute("SELECT id FROM letters").fetchone()[0]
+    at.text_area(key=f"body_{lid}").set_value("Corps modifié").run()
+    at.button(key=f"save_{lid}").click().run()
+    assert not at.exception
+    conn2 = db.connect(env["db_path"])
+    assert conn2.execute("SELECT body FROM letters WHERE id=?", (lid,)).fetchone()[0] == "Corps modifié"
+
+
+def test_profile_page_lists_facts_and_reanalyzes(env, tmp_path):
+    import json as _json
+
+    from stagefinder import db, profile as P
+
+    conn = db.connect(env["db_path"])
+    db.migrate(conn)
+    cv = tmp_path / "cv.pdf"
+    cv.write_bytes(b"pdf")
+    os.environ["CV_PATH"] = str(cv)
+
+    h = P.cv_hash(cv)
+    conn.execute(
+        "INSERT INTO facts(cv_hash,kind,label,detail,tech,metric,period) VALUES (?,?,?,?,?,?,?)",
+        (h, "skill", "Python", "3 ans de pratique", _json.dumps(["Python"]), "", ""))
+    conn.commit()
+
+    at = AppTest.from_file(APP)
+    at.run()
+    at.sidebar.radio[0].set_value("Profil").run()
+    assert not at.exception
+    assert any("Python" in m.value for m in at.markdown)
+    assert any(b.label == "Ré-analyser mon CV" for b in at.button)
+
+    del os.environ["CV_PATH"]

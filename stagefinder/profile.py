@@ -45,6 +45,13 @@ def _load(conn: sqlite3.Connection, h: str) -> list[Fact]:
     return [row_to_fact(r) for r in rows]
 
 
+def forget_facts(conn: sqlite3.Connection, cv_hash_value: str) -> None:
+    """Efface les faits en cache pour ce CV : le prochain appel à `load_or_extract_facts`
+    ré-analysera le PDF avec le LLM au lieu de servir la version en cache."""
+    conn.execute("DELETE FROM facts WHERE cv_hash=?", (cv_hash_value,))
+    conn.commit()
+
+
 def load_or_extract_facts(conn: sqlite3.Connection, llm, cv_path: Path) -> list[Fact]:
     h = cv_hash(cv_path)
     cached = _load(conn, h)
