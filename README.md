@@ -1,74 +1,75 @@
-# StageFinder v2
+# StageFinder
 
-Recherche d'offres multi-sources, déduplication persistante, scoring IA piloté par une campagne,
-lettres de motivation ancrées sur les faits du CV. Tout en local (SQLite).
+Un assistant personnel qui automatise votre recherche d'emploi : il trouve les offres
+pertinentes sur plusieurs sites, les trie selon votre profil, rédige une lettre de
+motivation sur mesure pour chacune, et garde une trace de vos candidatures — le tout
+dans un tableau de bord simple, sur votre ordinateur.
 
-## Installation
-    python -m pip install -e ".[dev]"
-    copy .env.example .env   # puis renseigner OPENROUTER_API_KEY et CV_PATH
+## Ce que ça vous apporte
 
-## Utilisation
-    python -m stagefinder.cli campaign add --name "..." --intent "..." --country FR --job-type internship
-    python -m stagefinder.cli campaign term <id> --kind keyword "..." "..."
-    python -m stagefinder.cli campaign term <id> --kind location "Paris"
-    python -m stagefinder.cli run --campaign <id>
-    python -m stagefinder.cli letters regenerate <job_id> --campaign <id> --instruction "plus court" --language en
-    python -m stagefinder.cli jobs retry-failed --stage enrich|score|letter [--campaign <id>]
+- 🔎 **Recherche automatique** sur plusieurs plateformes (Indeed, LinkedIn…), pour
+  n'importe quel métier et n'importe quel pays — pas seulement des stages en France.
+- 🎯 **Tri intelligent** : chaque offre est notée selon votre profil réel (votre CV),
+  pas sur des mots-clés au hasard — les offres qui ne correspondent pas sont écartées
+  automatiquement, vous ne voyez que les meilleures.
+- ✍️ **Lettres de motivation personnalisées**, écrites à partir de vos vraies
+  expériences et compétences (jamais inventées), prêtes à télécharger en `.docx`.
+- 🔁 **Zéro doublon, zéro travail répété** : relancer une recherche ne retraite que les
+  offres réellement nouvelles — pas de temps ni de coût perdu sur ce qui a déjà été fait.
+- 📋 **Suivi de vos candidatures** : statut, dates, notes, au même endroit.
 
-## Tableau de bord
+Vos données restent chez vous : rien n'est envoyé où que ce soit, à l'exception des
+appels au service d'IA nécessaires pour trier les offres et écrire les lettres.
 
-    streamlit run stagefinder/dashboard/app.py
+## Démarrage en 3 étapes
 
-Cinq écrans : Campagnes (création, suggestion IA des mots-clés, lancement d'un run),
-Run (suivi en direct), Offres (table triée par score, marquage manuel des doublons),
-Lettres (lecture, régénération, export .docx), Suivi (statut des candidatures).
-Le bouton « Lancer » démarre `stagefinder run` en sous-processus : fermer l'onglet du
-navigateur n'interrompt pas un run en cours.
+**1. Installer et configurer**
 
-## Suggestion IA des mots-clés
+```
+python -m pip install -e ".[dev]"
+copy .env.example .env
+```
 
-    python -m stagefinder.cli campaign suggest <id>              # affiche les suggestions
-    python -m stagefinder.cli campaign suggest <id> --apply      # les ajoute (origin=ai)
-    python -m stagefinder.cli campaign terms <id>                # liste les termes actuels
-    python -m stagefinder.cli campaign term-toggle <term_id> --enable|--disable
+Ouvrez le fichier `.env` créé et renseignez :
+- votre clé API OpenRouter (pour l'IA — voir [openrouter.ai](https://openrouter.ai)),
+- le chemin vers votre CV au format PDF.
 
-## Première utilisation
+**2. Lancer le tableau de bord**
 
-1. **Créer `.env` à partir de `.env.example`** avec une **nouvelle** clé OpenRouter (révoquer l'ancienne sur openrouter.ai/settings/keys).
+```
+streamlit run stagefinder/dashboard/app.py
+```
 
-2. **Créer une campagne et la lancer avec un petit volume** :
-   ```bash
-   python -m stagefinder.cli campaign add --name "Stage DS France" \
-     --intent "stage de fin d'études en data science / machine learning, 6 mois, France" \
-     --country FR --job-type internship --hours-old 168 --letter-language fr
-   python -m stagefinder.cli campaign term 1 --kind keyword "stage data science" "stage machine learning" "data science internship"
-   python -m stagefinder.cli campaign term 1 --kind location "Paris" "Lyon" "France"
-   python -m stagefinder.cli campaign term 1 --kind exclude "senior" "CDI temps plein" "5 ans d'expérience"
-   python -m stagefinder.cli run --campaign 1 --limit 10
-   ```
-   Vérifier que des `.docx` sont générés dans `data/letters/` et que les lettres sont en français avec des données réelles de l'entreprise et du poste.
+Une page s'ouvre automatiquement dans votre navigateur.
 
-3. **Relancer immédiatement pour vérifier l'idempotence** :
-   ```bash
-   python -m stagefinder.cli run --campaign 1 --limit 10
-   ```
-   Vous devriez voir `new: 0` et `letters: 0`, avec une exécution nettement plus rapide (aucun appel LLM hors profil en cache).
+**3. Créer une campagne de recherche et cliquer sur « Lancer »**
 
-## Limites connues (v2 core)
+Dans l'écran **Campagnes** :
+1. Décrivez en une phrase ce que vous cherchez (ex. *« poste d'ingénieur IA junior,
+   CDI, en France »*) et choisissez le pays.
+2. Cliquez sur **Suggérer avec l'IA** pour obtenir des mots-clés et des villes
+   pertinents — vous pouvez décocher ceux que vous ne voulez pas.
+3. Cliquez sur **Lancer**.
 
-- **Une campagne par offre** : le statut d'une offre (`jobs.status`) est global, pas par campagne.
-  Une offre déjà scorée/traitée pour la campagne A n'est pas re-scorée si elle est aussi rattachée
-  à la campagne B — seul `scores` (et `letters`) sont réellement par campagne.
-- Le validateur de lettres ne peut détecter une technologie absente à la fois de l'offre et des
-  faits du CV : il ne compare que ce qu'il connaît (offre + faits), pas un référentiel externe.
-- Les sélecteurs JobTeaser sont repris tels quels du scraper existant et peuvent devenir obsolètes
-  si JobTeaser change son HTML.
-- Lancez la CLI depuis le dossier du projet, ou gardez `.env` à la racine du projet : les chemins
-  relatifs (`DB_PATH`, `LETTERS_DIR`, `CV_PATH`) sont résolus par rapport à l'emplacement du
-  fichier `.env` trouvé, pas par rapport au répertoire courant.
+Quelques minutes plus tard :
+- l'écran **Offres** affiche les résultats triés par pertinence,
+- l'écran **Lettres** contient vos lettres de motivation prêtes à relire et à
+  télécharger,
+- l'écran **Run** vous montre l'avancement en direct pendant que ça tourne,
+- l'écran **Suivi** vous permet de noter où en est chaque candidature.
 
-## Tests
-    python -m pytest -q
+## Perspectives
 
-## Design
-Voir `docs/superpowers/specs/2026-09-20-stagefinder-design.md`.
+Pistes d'amélioration envisagées pour la suite :
+- Envoi automatique des candidatures par email (brouillon prêt à valider avant envoi).
+- Recherche programmée (par exemple chaque matin, sans action manuelle).
+- Relances automatiques après quelques jours sans réponse.
+- Enrichissement des lettres avec des informations publiques sur l'entreprise.
+- Ouverture à davantage de plateformes d'offres d'emploi.
+
+## Pour aller plus loin
+
+La documentation technique (commandes en ligne de commande, architecture, schéma de
+données, tests, limites connues) se trouve dans [`docs/TECHNICAL.md`](docs/TECHNICAL.md)
+et dans la conception détaillée
+[`docs/superpowers/specs/2026-09-20-stagefinder-design.md`](docs/superpowers/specs/2026-09-20-stagefinder-design.md).
